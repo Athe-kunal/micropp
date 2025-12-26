@@ -19,7 +19,8 @@ class ShardedMLP(nn.Module):
             layers.append(nn.ReLU())
             
         self.net = nn.Sequential(*layers)
-        self.loss_fn = nn.CrossEntropyLoss()
+        if self.is_last:
+            self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, x, targets=None):
         # Run the local chunk of the network
