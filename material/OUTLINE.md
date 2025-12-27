@@ -14,10 +14,6 @@ Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
 - **The Exercise:** Try to train it by manually passing the output of `part1` into `part2`.
 - **The Lesson:** Even on one machine, you have to manage the "hand-off" of the activation and the gradient.
 
-#### Introducing the "Cables" ([comms.py](../src/comms.py))
-
-- "What if part1 was in New York and part2 was in London?"
-
 #### Distributed Basics:
 
 - **Concept:** What is a Rank, World Size, and Process Group?
@@ -38,10 +34,10 @@ Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
 - **Solution:** Model Partitioning (slicing `nn.Sequential`).
   - See the init in [model.py](../src/model.py).
 
-#### The Naive Solution (and its failure):
+#### The Naive Solution:
 
 - **Concept:** Stop-and-wait execution.
-- **Lab:** Implement the Naive Schedule. Measure utilization (it will be low).
+- **Lab:** Implement the Naive Schedule. Measure utilization.
 
 #### The Pipelined Solution:
 
