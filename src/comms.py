@@ -58,7 +58,7 @@ class PipelineComms:
         # We must allocate an empty buffer to receive the data
         tensor = torch.zeros(shape, dtype=dtype, device=device)
         # print(dist.recv(tensor, src=self.prev_rank))
-        (dist.recv(tensor, src=self.prev_rank))
+        dist.recv(tensor, src=self.prev_rank)
         return tensor
 
     def send_backward(self, tensor):
