@@ -1,5 +1,3 @@
-# micropp Documentation
-
 - [1f1b](1f1b.md)
 - [gpipe](gpipe.md)
 - [naive](naive.md)
