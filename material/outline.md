@@ -2,12 +2,12 @@
 
 #### The "Monolith"
 
-Start with a single Python file that defines a very deep MLP and trains it on a single CPU.
+Start with a single Python file that defines a MLP and trains it on a single CPU.
 
 - **The Goal:** Prove the math works. The loss goes down.
 - **The Code:** Just `nn.Sequential` with 16 layers and a simple training loop.
 
-#### The "Manual Split" (The "Aha!" Moment)
+#### The "Manual Split"
 
 Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
 
