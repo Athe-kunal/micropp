@@ -1,10 +1,10 @@
 ### Syllabus
 
-#### The "Monolith"
+#### [Monolith](/src/monolith.py):
 
-Start with a single Python file that defines a MLP and trains it on a single CPU.
+Start with a MLP and train it on a single CPU.
 
-- **The Goal:** Prove the math works. The loss goes down.
+- **The Goal:** Establish a baseline.
 - **The Code:** Just `nn.Sequential` with 16 layers and a simple training loop.
 
 #### Motivation for PP:
@@ -16,7 +16,7 @@ Start with a single Python file that defines a MLP and trains it on a single CPU
   - **Hardware:** NVIDIA RTX 4090 (24 GB VRAM).
 - **Solution:** Model Partitioning (slicing `nn.Sequential`).
 
-#### The "Manual Split"
+#### [Manual](/src/manual.py):
 
 Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
 
