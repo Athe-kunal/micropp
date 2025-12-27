@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -26,27 +27,28 @@ class MonolithicMLP(nn.Module):
 
 # 3. Setup
 torch.manual_seed(42)
-device = torch.device("cpu")
 
-model = MonolithicMLP(HIDDEN_DIM, TOTAL_LAYERS).to(device)
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+model = MonolithicMLP(HIDDEN_DIM, TOTAL_LAYERS)
+optimizer = optim.SGD(model.parameters(), lr=0.01)
 
 # Generate one fixed batch to overfit
-fixed_input = torch.randn(BATCH_SIZE, HIDDEN_DIM).to(device)
-fixed_target = torch.randint(0, 2, (BATCH_SIZE,)).to(device)
+fixed_input = torch.randn(BATCH_SIZE, HIDDEN_DIM)
+# low is inclusive, high is exclusive
+fixed_target = torch.randint(0, 2, (BATCH_SIZE,))
 
 # 4. Training Loop
 print("--- Training Monolith (Ground Truth) ---")
 model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
-    
+    start_time = time.time()
     # Simple forward and backward
     loss = model(fixed_input, fixed_target)
     loss.backward()
     optimizer.step()
+    duration = time.time() - start_time
     
     if step % 5 == 0:
-        print(f"Step {step:02d} | Loss: {loss.item():.6f}")
+        print(f"Step {step+1} | Loss: {loss:.4f} | Time: {duration:.3f}s")
 
 print(f"Final Monolith Loss: {loss.item():.6f}")

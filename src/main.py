@@ -84,11 +84,8 @@ def main():
 
         # --- Logging ---
         # Only the last rank (who calculates loss) can print the loss value
-        if rank == world_size - 1:
-            print(f"[Step {step+1}/{STEPS}] Loss: {loss:.4f} | Time: {duration:.3f}s")
-        elif rank == 0:
-            # Rank 0 just lets us know it's alive
-            print(f"[Step {step+1}/{STEPS}] Rank 0 Finished")
+        if rank == world_size - 1 and step % 5 == 0:
+            print(f"Step {step+1} | Loss: {loss:.4f} | Time: {duration:.3f}s")
 
     # Clean up
     if rank == 0:

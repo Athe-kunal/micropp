@@ -1,13 +1,12 @@
 import torch
 from comms import init_distributed, PipelineComms
 
-def run_ping_pong():
+def ping_pong():
     rank, world_size, device = init_distributed()
     torch.distributed.barrier()
     print(rank, world_size, device)
     comms = PipelineComms(rank, world_size)
 
-    # Simple 2-GPU Logic
     if rank == 0:
         tensor = torch.rand(3).to(device)
         print(f"Rank 0: Sending {tensor}")
@@ -19,4 +18,4 @@ def run_ping_pong():
         print(f"Rank 1: Received {received}")
 
 if __name__ == "__main__":
-    run_ping_pong()
+    ping_pong()
