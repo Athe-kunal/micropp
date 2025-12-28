@@ -1,5 +1,7 @@
 '''
-Imagine main.py is a sheet of music.
+torchrun --nproc-per-node=4 src/main.py
+
+main.py is a sheet of music.
 
 torchrun is the conductor.
 
@@ -14,11 +16,8 @@ Musician 1's sheet says: "You are playing the Violin (GPU 0)."
 Musician 2's sheet says: "You are playing the Viola (GPU 1)."
 
 They all read the same notes (code), but they play on different instruments (GPUs) because of that initial setup instruction.
-'''
-'''
-What will happen when torchrun --nproc-per-node=4 src/main.py:
 
-torchrun launches 4 copies of main.py.
+Literally, torchrun launches 4 copies of main.py.
 
 It assigns RANK 0, 1, 2, 3 automatically.
 
@@ -31,10 +30,13 @@ import torch.optim as optim
 import time
 
 # Import our modules
-from src.comms import init_distributed, PipelineComms
-from src.model import ShardedMLP
-from src.schedule import naive_pipeline_step
-
+from comms import init_distributed, PipelineComms
+from model import ShardedMLP
+from schedule import naive_pipeline_step
+from profiler import PipelineProfiler
+import os
+# At top of file
+profiler = PipelineProfiler(rank=int(os.environ["RANK"]), enabled=True)
 # Hyperparameters
 BATCH_SIZE = 32
 HIDDEN_DIM = 128
@@ -60,10 +62,10 @@ if rank == 0:
 # 2. Initialize the Sharded Model
 # Each process only initializes its specific slice of layers
 model = ShardedMLP(
-    hidden_dim=HIDDEN_DIM, 
-    total_layers=TOTAL_LAYERS, 
-    rank=rank, 
-    world_size=world_size
+    HIDDEN_DIM, 
+    TOTAL_LAYERS, 
+    rank, 
+    world_size
 ).to(device)
 
 # 3. Setup Optimizer
@@ -84,27 +86,30 @@ else:
     fixed_target = None
 
 # 4. Training Loop
+start_time = time.time()
 model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
-
-    # --- The Pipeline Step ---
-    start_time = time.time()
     
-    # This function handles the Send/Recv/Compute orchestration
-    loss = naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device)
+    if model.is_last:
+        # This function handles the Send/Recv/Compute orchestration
+        loss = naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device, profiler)
+    else:
+        # This GPU doesn't know the loss; it just finished its communication/compute cycle
+        naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device, profiler)
     
     # Optimizer Step (All ranks do this locally after backward pass completes)
     optimizer.step()
-    
-    duration = time.time() - start_time
 
     # --- Logging ---
     # Only the last rank (who calculates loss) can print the loss value
     if rank == world_size - 1 and step % 5 == 0:
-        print(f"Step {step} | Loss: {loss:.4f} | Time: {duration:.3f}s")
+        print(f"Step {step:02d} | Loss: {loss:.6f}")
 
 # Clean up
-if rank == 0:
+if rank == world_size - 1:
     print("--- Training Complete ---")
+    duration = time.time() - start_time
+    print(f"Final Loss: {loss:.6f} | Time: {duration:.3f}s")
+profiler.print_summary()
 torch.distributed.destroy_process_group()

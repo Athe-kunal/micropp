@@ -1,4 +1,4 @@
-import torch
+import torch, os
 from comms import init_distributed, PipelineComms
 
 def ping_pong():
@@ -11,7 +11,7 @@ def ping_pong():
     # forcing them to wait until each has reached the barrier; this effectively
     # makes async distributed code temporarily synchronous at that point.
     torch.distributed.barrier()
-    print(rank, world_size, device)
+    print(rank, world_size, device, os.getpid())
     comms = PipelineComms(rank, world_size)
 
     if rank == 0:

@@ -1,5 +1,5 @@
-from src.comms import PipelineComms
-from src.model import ShardedMLP
+from comms import PipelineComms
+from model import ShardedMLP
 
 def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets, hidden_dim, device):
     """
@@ -43,6 +43,8 @@ def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets,
     # A. Get Gradients
     if model.is_last:
         loss = output
+        # Scalar Backward: loss.backward() (Used only on the last GPU).
+        # Non-Scalar Backward: output.backward(gradient) (Used on all previous GPUs).
         loss.backward() # This starts the chain reaction
         grad_to_send = input_data.grad 
     else:
@@ -53,6 +55,10 @@ def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets,
         grad_from_next = comms.recv_backward(output.shape, device)
         # B. Compute Local Gradients
         # This is the "Backprop" step connecting the received grad to our weights
+        # When you call .backward() on a non-scalar tensor (like a hidden activation with
+        # shape [32, 128]), PyTorch requires a "matching" gradient tensor of the same shape.
+        # This provided gradient acts as the starting point for the Vector-Jacobian Product,
+        # allowing the chain rule to flow backward to the weights and the input.
         output.backward(grad_from_next)
         grad_to_send = input_data.grad
         '''
