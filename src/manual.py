@@ -46,7 +46,7 @@ class Part2(nn.Module):
 # 3. Setup
 torch.manual_seed(42)
 cuda = False
-if torch.cuda.is_available() and torch.cuda.device_count >= 2:
+if torch.cuda.is_available() and torch.cuda.device_count() >= 2:
     cuda = True
 if cuda:
     part1 = Part1(HIDDEN_DIM, TOTAL_LAYERS).to(torch.cuda.device(0))

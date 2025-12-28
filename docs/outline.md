@@ -1,11 +1,11 @@
-### Syllabus
+## Syllabus
 
-#### [Monolith](https://github.com/kiankyars/micropp/blob/main/src/monolith.py):
+#### [Monolith](../src/monolith.py):
 
 Start with a MLP and train it on a single CPU.
 
-- **The Goal:** Establish a baseline.
-- **The Code:** Just `nn.Sequential` with 16 layers and a simple training loop.
+- **Concept:** Establish a baseline.
+- **Lab:** Just `nn.Sequential` with 16 layers and a simple training loop.
 
 #### Motivation for PP:
 
@@ -31,10 +31,9 @@ Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
   - **Rank:** Your unique ID badge (0, 1, 2, 3).
   - **Rank 0** is the "Boss" (usually handles logging, saving checkpoints, and data loading).
 - **Lab:** Spawn 2 processes on GPU (or CPU) and ping-pong a tensor.
-  - _Run command:_ `torchrun --nproc_per_node=2 lab_pingpong.py`
 
 
-#### [The Naive Solution](./naive.md):
+#### [Naive](./naive.md):
 
 - **Concept:** Stop-and-wait execution.
 - **Lab:** Implement the Naive Schedule. Measure utilization using nvidia-smi if cuda is available.
@@ -51,7 +50,7 @@ Cut the `nn.Sequential` into two pieces: `part1` and `part2`.
 
 ---
 
-### Library
+## Library
 
 **1. `comms.py` (The Glue)**
 
