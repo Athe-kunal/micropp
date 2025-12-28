@@ -28,7 +28,7 @@ By looking at the pebble graph, we can observe some inefficiencies of naive mode
 
 ### `requires_grad`
 
-#### Scenario 1: With `requires_grad = True`
+#### Scenario 1: `requires_grad = True`
 
 In this case, we allow the "chain" of math to stay connected across the two devices.
 
@@ -38,7 +38,7 @@ In this case, we allow the "chain" of math to stay connected across the two devi
 4. When we call `.backward()` on Rank 1, PyTorch calculates the gradient for its weights (D) **and** for the input C.
 5. **The Result:** Rank 1 now has a value for `C.grad`. It calls `send_backward(C.grad)` to Rank 0. Rank 0 receives this and can now calculate the gradients for its own weights (B).
 
-#### Scenario 2: Without `requires_grad = True`
+#### Scenario 2: `requires_grad = False`
 
 In this case, Rank 1 treats the incoming data as a "constant" rather than a variable.
 
@@ -52,21 +52,17 @@ Essentially, `requires_grad = True` creates a "hook" at the very edge of the dev
 
 ### `detach()`
 
-#### 1. The Physical Gap
-
-When you send a tensor via `dist.send`, the data travels over a network cable (or between CPU processes). The "Graph" (the memory pointers that link one layer to the next) cannot travel through the cable. It only exists in the local RAM of the sending GPU.
-
-#### 2. Preventing Memory Leaks
+#### 1. Preventing Memory Leaks
 
 If you do not call `.detach()`, the `output` tensor remains "hooked" to the computational graph of the current GPU. PyTorch will try to keep all the activations of all previous layers in memory because it thinks you might call `.backward()` on that specific `output` variable later. This leads to a massive memory leak.
 
-#### 3. The "Micro" Architecture Logic
+#### 2. The "Micro" Architecture Logic
 
 By detaching, you are explicitly saying: *"I am done with this forward pass locally. I am handing off a static copy of the data to the next device"*.
 
 * **Forward:** Next device gets a "clean" tensor and restarts the graph using `requires_grad = True`.
 * **Backward:** We manually reconnect the chain later when we receive the gradient and call `output.backward(received_grad)`.
 
-#### 4. Summary
+#### 3. Summary
 
-You don't want the next GPU to have "ghost" references to memory that it cannot access. You give it the numbers (the values) and keep the history (the graph) locally for when the backward pass eventually returns.
+You don't want the next GPU to have "ghost" references to memory that it cannot access. You give it the activations and keep the graph locally for when the backward pass eventually returns.
