@@ -86,7 +86,6 @@ start_time = time.time()
 model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
-    
     if model.is_last:
         # This function handles the Send/Recv/Compute orchestration
         loss = naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device)
@@ -100,11 +99,11 @@ for step in range(STEPS):
     # --- Logging ---
     # Only the last rank (who calculates loss) can print the loss value
     if rank == world_size - 1 and step % 5 == 0:
-        print(f"Step {step:02d} | Loss: {loss:.6f}")
+        print(f"Step {step:02d} | Loss: {loss.item():.6f}")
 
 # Clean up
 if rank == world_size - 1:
     print("--- Training Complete ---")
     duration = time.time() - start_time
-    print(f"Final Loss: {loss:.6f} | Time: {duration:.3f}s")
+    print(f"Final Loss: {loss.item():.6f} | Time: {duration:.3f}s")
 torch.distributed.destroy_process_group()

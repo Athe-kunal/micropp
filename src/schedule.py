@@ -70,7 +70,8 @@ def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets,
     if not model.is_first:
         comms.send_backward(grad_to_send)
         
-    return loss.item() if model.is_last else None
+    if model.is_last:
+        return loss
 
 def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device):
     """
