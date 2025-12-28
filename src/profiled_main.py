@@ -3,11 +3,10 @@ import torch.optim as optim
 import time
 
 # Import our modules
-from my_work.step2_comms import init_distributed, PipelineComms
-from my_work.step4_model import ShardedMLP
+from comms import init_distributed, PipelineComms
+from model import ShardedMLP
 from profiled_schedule import naive_pipeline_step
 from profiler import PipelineProfiler
-import profiler
 
 # Hyperparameters
 BATCH_SIZE = 32
@@ -51,9 +50,9 @@ model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
     if rank == world_size - 1:
-        loss = naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device, profiler)
+        loss = naive_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, device)
     else:
-        naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device, profiler)
+        naive_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, device)
     optimizer.step()
     if rank == world_size - 1 and step % 5 == 0:
         print(f"Step {step:02d} | Loss: {loss.item():.6f}")

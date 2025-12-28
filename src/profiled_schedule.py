@@ -41,4 +41,5 @@ def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, profiler: Pipel
             comms.send_backward(grad_to_send)
     
     profiler.end_stage("step")
-    return loss.item() if model.is_last else None
+    if model.is_last:
+        return loss
