@@ -32,12 +32,13 @@ import time
 # Import our modules
 from comms import init_distributed, PipelineComms
 from model import ShardedMLP
-from schedule import naive_pipeline_step
+from schedule import naive_pipeline_step, gpipe_pipeline_step, onef_oneb_pipeline_step
 # Hyperparameters
 BATCH_SIZE = 32
 HIDDEN_DIM = 128
 TOTAL_LAYERS = 16
 STEPS = 50
+CHUNKS = 4
 
 # 1. Setup Distributed Environment
 rank, world_size, device = init_distributed()
@@ -88,10 +89,10 @@ for step in range(STEPS):
     optimizer.zero_grad()
     if model.is_last:
         # This function handles the Send/Recv/Compute orchestration
-        loss = naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device)
+        loss = gpipe_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     else:
         # This GPU doesn't know the loss; it just finished its communication/compute cycle
-        naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device)
+        gpipe_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     
     # Optimizer Step (All ranks do this locally after backward pass completes)
     optimizer.step()
@@ -99,11 +100,11 @@ for step in range(STEPS):
     # --- Logging ---
     # Only the last rank (who calculates loss) can print the loss value
     if rank == world_size - 1 and step % 5 == 0:
-        print(f"Step {step:02d} | Loss: {loss.item():.6f}")
+        print(f"Step {step:02d} | Loss: {loss.item()/CHUNKS:.6f}")
 
 # Clean up
 if rank == world_size - 1:
     print("--- Training Complete ---")
     duration = time.time() - start_time
-    print(f"Final Loss: {loss.item():.6f} | Time: {duration:.3f}s")
+    print(f"Final Loss: {loss.item()/CHUNKS:.6f} | Time: {duration:.3f}s")
 torch.distributed.destroy_process_group()

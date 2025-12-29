@@ -1,5 +1,5 @@
-from comms import PipelineComms
-from model import ShardedMLP
+from step2_comms import PipelineComms
+from step4_model import ShardedMLP
 
 def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets, hidden_dim, device):
     """
@@ -27,7 +27,7 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
     """
     GPipe Schedule: FWD all chunks -> BWD all chunks.
     """
-    # TODO: Chunk the batch into microbatches
+    # TODO: Chunk the batches into microbatches and the targets in to microtargets
     # TODO: For i in [0..chunks):
     #     - If comms.rank == 0, use microbatch directly; else, receive input
     #     - Forward microbatch through model
@@ -45,7 +45,7 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
     """
     1F1B Schedule: Interleaves Forward and Backward passes in a pipelined manner.
     """
-    # TODO: Chunk the batch into microbatches
+    # TODO: Chunk the batches into microbatches and the targets in to microtargets
     # TODO: Initialize buffers for activations, gradients, etc.
 
     # Forward warmup: Fill the pipeline
