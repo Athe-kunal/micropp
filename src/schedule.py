@@ -1,3 +1,4 @@
+import torch
 from comms import PipelineComms
 from model import ShardedMLP
 
@@ -79,7 +80,7 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
     """
     # 1. Prepare Data Slices
     if comms.rank == 0:
-        micro_batches = batch.chunk(chunks)
+        micro_batches = torch.chunk(batch, chunks)
     if comms.rank == comms.world_size - 1:
         micro_targets = targets.chunk(chunks)
     
@@ -113,6 +114,11 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
     # Layers: Reverse Order (handled by Autograd).
     # Micro-batches: Forward Order (handled by loop to match the send/recv order).
     # Think of a conveyor belt
+    # Both loop orders give the same result here because each micro-batch's 
+    # forward and backward passes are fully independent of the others in this 
+    # GPipe schedule: all forwards are completed and stored before any backward 
+    # begins, so the order of backward iteration (reversed or not) does not 
+    # change gradients or loss accumulation across chunks.
     for i in range(chunks):
         # Retrieve state from Phase 1
         input_data = input_buffers[i]
@@ -136,76 +142,83 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
     if comms.rank == comms.world_size - 1:
         return total_loss
 
+
 def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device):
     """
-    1F1B Schedule: Interleaves Forward and Backward passes in a pipelined manner.
+    1F1B Schedule: Interleaves Forward and Backward passes.
     """
-
-    microbatches = batch.chunk(chunks, dim=0)
-    micro_targets = targets.chunk(chunks, dim=0)
-
-    fwd_buffer = []
-    input_buffer = []
-
-    # Forward warmup: fill pipeline (only forward)
-    for i in range(comms.rank):
-        if comms.rank == 0:
-            inp = microbatches[i]
-        else:
-            inp = comms.recv_forward((microbatches[i].shape), device)
-            inp.requires_grad = True
-        out = model(inp, micro_targets[i])
-        if comms.rank != comms.world_size - 1:
-            comms.send_forward(out.detach())
-        fwd_buffer.append(out)
-        input_buffer.append(inp)
-
-    # 1F1B steady state: forward one, backward one, alternate
-    num_steady = chunks - comms.rank
-    losses = []
-    for i in range(num_steady):
-        # Forward next microbatch
-        idx = i + comms.rank
-        if comms.rank == 0:
-            inp = microbatches[idx]
-        else:
-            inp = comms.recv_forward((microbatches[idx].shape), device)
-            inp.requires_grad = True
-        out = model(inp, micro_targets[idx])
-        if comms.rank != comms.world_size - 1:
-            comms.send_forward(out.detach())
-        fwd_buffer.append(out)
-        input_buffer.append(inp)
-
-        # Backward previous microbatch
-        bwd_idx = i
-        out_bwd = fwd_buffer[bwd_idx]
-        inp_bwd = input_buffer[bwd_idx]
-        if comms.rank == comms.world_size - 1:
-            loss = out_bwd
-            loss.backward()
-            losses.append(loss)
-        else:
-            gradients = comms.recv_backward(out_bwd.shape, device)
-            out_bwd.backward(gradients)
-        if comms.rank != 0:
-            comms.send_backward(inp_bwd.grad)
-
-    # Backward drain: finish outstanding backward passes
-    for i in range(comms.rank, chunks):
-        bwd_idx = i
-        out_bwd = fwd_buffer[bwd_idx]
-        inp_bwd = input_buffer[bwd_idx]
-        if comms.rank == comms.world_size - 1:
-            loss = out_bwd
-            loss.backward()
-            losses.append(loss)
-        else:
-            gradients = comms.recv_backward(out_bwd.shape, device)
-            out_bwd.backward(gradients)
-        if comms.rank != 0:
-            comms.send_backward(inp_bwd.grad)
-
+        # 1. Prepare Data Slices
+    if comms.rank == 0:
+        micro_batches = torch.chunk(batch, chunks)
     if comms.rank == comms.world_size - 1:
-        # Sum all loss values across microbatches for simplicity
-        return sum(losses)
+        micro_targets = targets.chunk(chunks)
+    
+    # Storage for "Phase 2"
+    input_buffers = [] 
+    output_buffers = []
+    
+    # Schedule Logic
+    # Rank 0 (First) has max warmup (needs to fill the whole pipe)
+    # Rank N (Last) has 0 warmup (can backward immediately)
+    num_warmup = comms.world_size - comms.rank - 1
+    num_1f1b = chunks - num_warmup
+    
+    def run_forward(micro_batch_idx):
+        # A. Setup Input
+        if comms.rank == 0:
+            input_data = micro_batches[micro_batch_idx]
+        else:
+            shape = (batch//chunks, hidden_dim)
+            input_data = comms.recv_forward(shape, device)
+            input_data.requires_grad = True
+
+        # B. Forward Pass
+        if comms.rank == comms.world_size - 1:
+            output = model(input_data, micro_targets[micro_batch_idx])
+        else:
+            output = model(input_data)
+            comms.send_forward(output.detach())
+
+        # C. Buffer
+        input_buffers[micro_batch_idx] = input_data
+        output_buffers[micro_batch_idx] = output
+
+    def run_backward(micro_batch_idx):
+        # Retrieve State
+        input_data = input_buffers[micro_batch_idx]
+        output = output_buffers[micro_batch_idx]
+        
+        if comms.rank == comms.world_size - 1:
+            # On Last Rank, 'output' IS the loss
+            loss = output
+            loss.backward()
+            total_loss += loss
+        else:
+            # On other ranks, we need gradients from downstream
+            grad_from_next = comms.recv_backward(output.shape, device)
+            output.backward(grad_from_next)
+            
+        # Send gradients backward (if not first)
+        if comms.rank != 0:
+            comms.send_backward(input_data.grad)
+
+    # --- EXECUTION PHASES ---
+    total_loss = torch.zeros((batch//chunks, hidden_dim))
+
+    # Phase 1: Warmup (Forward Only)
+    for i in range(num_warmup):
+        run_forward(i)
+
+    # Phase 2: Steady State (1F1B)
+    # We perform Forward for (i + num_warmup) and Backward for (i)
+    for i in range(num_1f1b):
+        run_forward(i + num_warmup)
+        total_loss += run_backward(i)
+
+    # Phase 3: Cooldown (Backward Only)
+    for i in range(num_warmup):
+        total_loss += run_backward(i + num_1f1b)
+
+    # Return Loss
+    if comms.rank == comms.world_size - 1:
+        return total_loss
