@@ -38,7 +38,7 @@ BATCH_SIZE = 32
 HIDDEN_DIM = 128
 TOTAL_LAYERS = 16
 STEPS = 50
-CHUNKS = 4
+CHUNKS = 8
 
 # 1. Setup Distributed Environment
 rank, world_size, device = init_distributed()
@@ -89,10 +89,10 @@ for step in range(STEPS):
     optimizer.zero_grad()
     if model.is_last:
         # This function handles the Send/Recv/Compute orchestration
-        loss = gpipe_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
+        loss = onef_oneb_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     else:
         # This GPU doesn't know the loss; it just finished its communication/compute cycle
-        gpipe_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
+        onef_oneb_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     
     # Optimizer Step (All ranks do this locally after backward pass completes)
     optimizer.step()

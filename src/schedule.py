@@ -70,7 +70,6 @@ def naive_pipeline_step(model: ShardedMLP, comms: PipelineComms, batch, targets,
     # C. Send Gradients
     if not model.is_first:
         comms.send_backward(grad_to_send)
-        
     if model.is_last:
         return loss
 
@@ -110,7 +109,8 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
         output_buffers.append(output) # On last rank, this is the Loss
 
     # --- PHASE 2: ALL BACKWARDS (Drain the Pipe) ---
-    total_loss = torch.zeros(output.shape)
+    if comms.rank == comms.world_size - 1:
+        total_loss = torch.zeros(output.shape)
     # Layers: Reverse Order (handled by Autograd).
     # Micro-batches: Forward Order (handled by loop to match the send/recv order).
     # Think of a conveyor belt
@@ -126,7 +126,7 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
         
         if comms.rank == comms.world_size - 1:
             # On Last Rank, 'output' IS the loss
-            loss = output
+            loss = output / chunks
             loss.backward()
             total_loss += loss
         else:
@@ -138,7 +138,7 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
         if comms.rank != 0:
             comms.send_backward(input_data.grad)
             
-    # Return average loss across chunks (for logging) if last rank
+    # Return loss across chunks (for logging) if last rank
     if comms.rank == comms.world_size - 1:
         return total_loss
 
@@ -154,8 +154,8 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
         micro_targets = targets.chunk(chunks)
     
     # Storage for "Phase 2"
-    input_buffers = [] 
-    output_buffers = []
+    input_buffers = [None] * chunks 
+    output_buffers = [None] * chunks
     
     # Schedule Logic
     # Rank 0 (First) has max warmup (needs to fill the whole pipe)
@@ -177,7 +177,7 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
             output = model(input_data, micro_targets[micro_batch_idx])
         else:
             output = model(input_data)
-            comms.send_forward(output.detach())
+            comms.isend_forward(output.detach())
 
         # C. Buffer
         input_buffers[micro_batch_idx] = input_data
@@ -190,9 +190,8 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
         
         if comms.rank == comms.world_size - 1:
             # On Last Rank, 'output' IS the loss
-            loss = output
+            loss = output / chunks
             loss.backward()
-            total_loss += loss
         else:
             # On other ranks, we need gradients from downstream
             grad_from_next = comms.recv_backward(output.shape, device)
@@ -200,25 +199,31 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
             
         # Send gradients backward (if not first)
         if comms.rank != 0:
-            comms.send_backward(input_data.grad)
+            comms.isend_backward(input_data.grad)
+        if comms.rank == comms.world_size - 1:
+            return loss
 
     # --- EXECUTION PHASES ---
-    total_loss = torch.zeros((batch//chunks, hidden_dim))
+    if comms.rank == comms.world_size - 1:
+        total_loss = torch.zeros(1, device=device)
 
     # Phase 1: Warmup (Forward Only)
     for i in range(num_warmup):
         run_forward(i)
 
     # Phase 2: Steady State (1F1B)
-    # We perform Forward for (i + num_warmup) and Backward for (i)
     for i in range(num_1f1b):
         run_forward(i + num_warmup)
-        total_loss += run_backward(i)
+        # run_backward returns the loss (on last rank) or None (others)
+        res = run_backward(i)
+        if comms.rank == comms.world_size - 1:
+            total_loss += res
 
     # Phase 3: Cooldown (Backward Only)
     for i in range(num_warmup):
-        total_loss += run_backward(i + num_1f1b)
+        res = run_backward(i + num_1f1b)
+        if comms.rank == comms.world_size - 1:
+            total_loss += res
 
     # Return Loss
-    if comms.rank == comms.world_size - 1:
-        return total_loss
+    return total_loss if comms.rank == comms.world_size - 1 else None
