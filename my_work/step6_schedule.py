@@ -70,4 +70,69 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
     #     - Backward pass for remaining microbatches (as above)
 
     # TODO: Return loss if last stage, else None
-    pass
+        # 1. Prepare Data Slices
+    if comms.rank == 0:
+        micro_batches = torch.chunk(batch, chunks)
+    if comms.rank == comms.world_size - 1:
+        micro_targets = targets.chunk(chunks)
+    warmup = comms.world_size-comms.rank-1
+    onefoneb = chunks - warmup
+    
+    # Storage for "Phase 2"
+    input_buffers = [None] * chunks 
+    output_buffers = [None] * chunks
+    async_requests = []
+
+    def forward(microbatchidx):
+        if comms.rank == 0:
+            input_data = micro_batches[microbatchidx]
+        else:
+            shape = (batch//chunks, hidden_dim)
+            input_data = comms.recv_forward(shape, device)
+            input_data.requires_grad = True
+
+        # B. Forward Pass
+        if comms.rank == comms.world_size - 1:
+            output = model(input_data, micro_targets[microbatchidx])
+        else:
+            output = model(input_data)
+            req = comms.isend_forward(output.detach())
+            async_requests.append(req)
+
+        # D. Buffer for Backward
+        input_buffers[microbatchidx] = input_data
+        output_buffers[microbatchidx] = output # On last rank, this is the Loss
+    
+    def backward(microbatchidx):
+        # Retrieve state from Phase 1
+        input_data = input_buffers[microbatchidx]
+        output = output_buffers[microbatchidx]
+        
+        if comms.rank == comms.world_size - 1:
+            # On Last Rank, 'output' IS the loss
+            loss = output / chunks
+            loss.backward()
+        else:
+            # On other ranks, we need gradients from downstream
+            grad_from_next = comms.recv_backward(output.shape, device)
+            output.backward(grad_from_next)
+            
+        # Send gradients backward (if not first)
+        if comms.rank != 0:
+            comms.send_backward(input_data.grad)
+        if comms.rank == comms.world_size - 1:
+            return loss
+    if comms.rank == comms.world_size - 1:
+        total_loss = torch.zeros(1, device=device)
+    for i in range(warmup):
+        forward(i)
+    for i in range(onefoneb):
+        forward(i+warmup)
+        res = backward(i)
+        if comms.rank == comms.world_size - 1:
+            total_loss += res
+    for i in range(warmup):
+        backward(i+onefoneb)
+    # Return loss across chunks (for logging) if last rank
+    if comms.rank == comms.world_size - 1:
+        return total_loss
