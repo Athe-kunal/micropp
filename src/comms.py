@@ -51,14 +51,17 @@ class PipelineComms:
     def send_forward(self, tensor):
         """Send activation to the next GPU."""
         # .contiguous() is required before sending
+        print(f"[Rank {self.rank}] send_forward() CALLED - BLOCKING until Rank {self.next_rank} calls recv_forward()")
         dist.send(tensor.contiguous(), dst=self.next_rank)
+        print(f"[Rank {self.rank}] send_forward() COMPLETE - unblocked")
 
     def recv_forward(self, shape, device, dtype=torch.float32):
         """Receive activation from the previous GPU."""
         # We must allocate an empty buffer to receive the data
+        print(f"[Rank {self.rank}] recv_forward() CALLED - BLOCKING until Rank {self.prev_rank} calls send_forward()")
         tensor = torch.zeros(shape, dtype=dtype, device=device)
-        # print(dist.recv(tensor, src=self.prev_rank))
         dist.recv(tensor, src=self.prev_rank)
+        print(f"[Rank {self.rank}] recv_forward() COMPLETE - unblocked")
         return tensor
 
     def send_backward(self, tensor):
@@ -69,14 +72,18 @@ class PipelineComms:
         # to reason about. Async (isend) allows overlapping
         # computation and communication, 
         # increasing efficiency and complexity.
+        print(f"[Rank {self.rank}] send_backward() CALLED - BLOCKING until Rank {self.prev_rank} calls recv_backward()")
         dist.send(tensor.contiguous(), dst=self.prev_rank)
+        print(f"[Rank {self.rank}] send_backward() COMPLETE - unblocked")
 
     def recv_backward(self, shape, device, dtype=torch.float32):
         """Receive gradients from the next GPU."""
+        print(f"[Rank {self.rank}] recv_backward() CALLED - BLOCKING until Rank {self.next_rank} calls send_backward()")
         tensor = torch.zeros(shape, dtype=dtype, device=device)
-        # if self.next_rank rank is not part of the process, we return -1
         dist.recv(tensor, src=self.next_rank)
+        print(f"[Rank {self.rank}] recv_backward() COMPLETE - unblocked")
         return tensor
     
     def isend_forward(self, tensor):
+        print(f"[Rank {self.rank}] isend_forward() CALLED - ASYNC (returns immediately)")
         return dist.isend(tensor.contiguous(), dst=self.next_rank)
