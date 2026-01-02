@@ -8,3 +8,16 @@ dependencies = [
     "numpy>=2.2.6",
     "torch>=2.9.1",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = []
