@@ -50,9 +50,9 @@ model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
     if rank == world_size - 1:
-        loss = onef_oneb_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
+        loss = gpipe_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     else:
-        onef_oneb_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
+        gpipe_pipeline_step(model, comms, profiler, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device)
     optimizer.step()
     if rank == world_size - 1 and step % 5 == 0:
         print(f"Step {step:02d} | Loss: {loss.item():.6f}")

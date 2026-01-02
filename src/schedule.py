@@ -146,7 +146,7 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
     """
     1F1B Schedule: Interleaves Forward and Backward passes.
     """
-        # 1. Prepare Data Slices
+    # 1. Prepare Data Slices
     if comms.rank == 0:
         micro_batches = torch.chunk(batch, chunks)
     if comms.rank == comms.world_size - 1:
@@ -219,9 +219,7 @@ def onef_oneb_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, de
 
     # Phase 3: Cooldown (Backward Only)
     for i in range(num_warmup):
-        res = run_backward(i + num_1f1b)
-        if comms.rank == comms.world_size - 1:
-            total_loss += res
+        run_backward(i + num_1f1b)
     
     # Return Loss
     return total_loss if comms.rank == comms.world_size - 1 else None
