@@ -11,7 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-ruff@v1.7.0
+      - uses: astral-sh/setup-uv@v4
+      - name: Install ruff
+        run: uv pip install ruff
       - name: Run ruff
-        run: ruff check src
+        run: uv run ruff check src
 
