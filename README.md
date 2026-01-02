@@ -24,7 +24,7 @@ uv run torchrun --nproc-per-node=4 src/main.py
 See [kiankyars.github.io/micropp/](https://kiankyars.github.io/micropp/) for detailed explanations.
 
 ## Repo Structure
-
+```text
 ├── CONTRIBUTING.md
 ├── README.md
 ├── docs
@@ -48,7 +48,7 @@ See [kiankyars.github.io/micropp/](https://kiankyars.github.io/micropp/) for det
 │   ├── profiler.py
 │   └── schedule.py
 └── uv.lock
-
+```
 ## Acknowledgements
 
 Simon Boehm, TE Hao
