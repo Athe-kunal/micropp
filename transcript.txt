@@ -1,0 +1,4859 @@
+Did you ever look at Deep Seek's
+pipeline parallelism algorithm dualpipe
+and ever think to yourself what black
+magic do these researchers use to
+conceive of such an algorithm? Well,
+don't worry because in this course we
+will derive pipeline parallelism from
+first principles and from scratch so
+that you can also make such an algorithm
+afterwards. My name is Kian and welcome
+to the pipeline parallelism from scratch
+course. And let's get into it. And
+before we get into it, I quickly want to
+mention the prerequisites of this course
+which are both PyTorch and Python. So in
+order to get the full value of this
+course, you should have experience with
+using both of these frameworks. So let's
+get started. The first step of course is
+going to be cloning the repository which
+you can take here or by going to the
+repo itself which is linked in the video
+description. and then just going through
+the standard GitHub cloning instructions
+and then once you've done that you will
+find the following menu of files. So let
+me first bring your attention to the my
+work directory because this is where all
+of the skeleton code is which we will
+complete together throughout the course.
+As you can see, there are five steps.
+And then moving on, we have docs which
+can be ignored because all of the docs
+are at this website which is just the
+same URL but in the GitHub pages format
+as the repository. So the index is here
+and then you can go through all of the
+different sections of the homepage which
+I will go through one at a time. So
+there's no need to go at this time and
+check out the website unless you want to
+check it out beforehand.
+And furthermore, we have the source
+directory. And these are all of the
+completed
+ground truth files, which is to say that
+as we go through the course, every
+single step here will correspond to one
+of the files here. So for example, step
+one manual will be the same as the
+manual file. And this is just the
+completed version so that it has
+comments first of all to explain all the
+steps like pretty thorough comments and
+it also works. So if you have a bug and
+you can't find the reason why it's not
+working then you can simply refer to
+this and other than that there's just
+the readme and main.py which is also
+implemented for us and it just the
+runner which when we go into step five
+and actually implement our pipeline
+scheduler it will what it is essentially
+what orchestrates the entire run. So now
+that we've gone through the file
+structure of the repository, let's go
+through the syllabus. So in this course,
+we will start with a MLP and train on a
+single CPU. It's called monolith because
+it only has one device or one GPU, CP,
+whatever you want to call it. And the
+goal here is just to establish a
+baseline with a sequential neural
+network that is simply 16 layers. And
+then we will motivate pipeline
+parallelism. In fact, we can just
+discuss it right now. So, as you may or
+may have heard before, a memory wall is
+essentially when your model does not fit
+on the GPU that you have. So, there are
+many ways to overcome this and one of
+them is through pipeline parallelism. So
+in this example, we have a 10 billion
+parameter LLM for example and it has the
+weight stored in float point 32 which
+would mean four bytes per parameter and
+if we multiply 4 by 10 billion then we
+get 40 GB and let's say for example we
+have a 4090 as our hardware. Well, you
+can see here that the VRAM of this chip
+is much less than the weights that we
+have. And of course, you don't simply
+need 40 GB to run this model. Since you
+have to store activations, this will be
+required. This will require more than 40
+GB. So, the solution that pipeline
+parallel introduces is model
+partitioning, which we will discuss in
+detail. And we will do this first
+manually. So, this is not what you ever
+want to do in production, but it's just
+to illustrate the point. And then once
+we've done this manually without any
+pipeline then we will go through the
+distributed basics which gives us the
+foundation for how we will communicate
+between the different GPUs because if
+you didn't know it already pipeline
+parallelism requires at least two GPUs.
+It's multiple GPUs which have are which
+are split up which are splitting the
+model amongst themselves.
+Then we'll talk about the naive solution
+and then the two sequential upgrades
+from the naive solution. So the first
+one is called G-pipe which was made by
+Google in 2019. And then after that we
+have one forward one backward which came
+out in 2021. Of course the
+state-of-the-art has improved since then
+but if you know these two then you're
+already pretty well mastered the concept
+of pipeline parallelism. So that is our
+syllabus. And with that being said let's
+start off with monolith. So, as you'll
+see, monolith only exists in the SRC and
+not in my work because we're not going
+to implement this since it has nothing
+to do with pipeline parallelism. This is
+literally just a 16 layer MLP.
+And since it's only 54 lines, we're
+going to go through the entire file very
+quickly just to see what's going on
+because this is the same template as all
+of the succeeding files in the course.
+So we have a 32 batch size with a hidden
+dimension of 128 and 16 layers with 50
+steps in our training loop. And then we
+initialize the MLP here. It's called the
+monolithic MLP. And simply um we take a
+list of layers. Of course, since it does
+inherit from the nn.module class, which
+is the base class for all neural network
+modules, then we need to call the super
+method so that all of the parameters of
+the NN module are initialized. For
+example, this sets up autograd and also
+the device tracking because pytorch will
+move your tensors and models
+automatically from device to device. But
+this won't be able to happen unless you
+have the uh parent method initialized
+which is nn module. And yeah we we have
+our layers here which we simply append
+to. So every layer of the model is just
+a nn linear which is a fully connected
+layer with hidden dimension 120 in this
+case followed by a nonlinear activation
+function which is just relu. So, we're
+really doing the most simple primitive
+MLP um operations because this is not
+the purpose of the course to make some
+say our MLP. It's just to have a
+baseline. And then we have our head
+which is what will perform the
+classification. So, I haven't mentioned
+it but we're just training an MLP on
+random data to form to do binary
+classification. As you can see, our
+dimension is reduced from 128 to two in
+the last layer because we want to have
+two classes. And then we take our 16 +
+one head layers and then uh use the star
+to unpack all of those layers into a n
+sequential and we also establish a cross
+entropy loss as our loss function since
+it is once again binary classification.
+Then the forward function is just
+getting our logits and then using the
+cross entry loss to calculate our loss
+from those logits. So hopefully up to
+now this is all pretty simple. One thing
+worth noting is that the manual seed is
+set to 42 in all of our files. So we can
+have our so we can have a consistent way
+of checking results between different
+methods. And then we'll initialize our
+model here. Initialize the atom
+optimizer with a learning rate of 0.001.
+The same thing is done throughout the
+entire course. And as I mentioned, we
+are going to overfit to a random tensor
+of batch size 32 and hidden mentioned
+128. So the model is literally just
+learning a random u tensor. And
+then our fixed target is the class of
+each random tensor. So for every single
+element in this 32 batch size tensor,
+we'll give it a class through the
+torch.randit function which just creates
+a tensor from 0 to one because the low
+is inclusive and the high is exclusive
+just like range for example. And it will
+just be of shape 32. And here's the
+training loop. We start the training and
+we'll time it as well. And then for 50
+steps, we'll first um zero our gradient
+so we're not accumulating the gradients
+unknowingly. And then we calculate the
+loss. We do the backward pass back
+propagation our optimizer step. And then
+every single
+five steps we will print our loss and
+the step that we're on. And that's it.
+So as I said, we're not actually
+implementing this oursel. So what we're
+going to do instead is just use UV run
+to do this right now. And throughout the
+entire course I'll be using um UV run.
+But if you prefer or any other way of
+managing a Python project then please do
+that instead. That's the way I'm doing
+it in this course. And everything that I
+do um you will be able to reproduce
+because UV is just really nice and
+reproducible. So that's my
+recommendation. Anyways, as you can see
+in our training um setup with 50
+iterations, we started with a loss of
+0.7 in our cross entropy loss and then
+it went all the way down to 0.2436.
+And because once again we have our
+manual seat set to 42. This is
+deterministic. So if I run this one more
+time, it's the same exact thing. Of
+course the time is not deterministic
+because wherever the memory is happening
+like of course the memory management
+that's happening at a very low level in
+C probably and the buffer management
+makes it such that the time is different
+slightly every single round but the
+final loss is not and if I just show you
+something here
+by commenting out the manual seed it
+will just do the default manual seed and
+you can see that it's different in terms
+of the final loss so the final loss is
+always changing because um I'm not
+actually sure what the behavior is when
+you don't set a manual ual seed. It
+probably just gives a random seed to the
+random seed. But in any case, what we'll
+note here is that the final loss is
+always the same with our manual seed. So
+this is our monolith. And now let's come
+back to our syllabus. So we establish
+the baseline and it's just an sequential
+with 16 layers. And now once again we're
+going to hypothetically consider the
+fact that we're just running this on a
+CPU of course and it's a really small
+model. But let's say that this would no
+longer fit on the model and we want to
+split it in half. So we can split it
+across on two GPUs. So we'll be cutting
+the neural network sequential class into
+a part one and a part two by manually
+passing the output of part one into part
+two. And this is our first step in my
+work. So let's open up my work and step
+one which is called manual.py.
+So here you go. As you can see, it's
+quite similar in structure to our man
+our models.py file except it's got a
+bunch of to-dos where we need to add the
+functionality which will make it sharded
+across two models. So here you can see
+first of all we have part one part two
+instead of just the monolithic MLP in
+the first file and furthermore we need
+to for example make our optimizer track
+both the parameters for the first part
+of the model and the second part. And
+then another thing worth noting is that
+in terms of the total layers, we will
+not do 4 I in range 16 for each model
+because then the final model will be
+double the size as the monolith. So
+instead we'll have to divide by the
+number of devices that we have. In this
+case, it's two. So we'll do 16 divid by
+two and every single part or the two
+parts will hold eight. To be more
+precise, this one will hold eight and
+part two will hold nine because it's
+also storing the classification head. So
+that's the context that I'll give you. I
+would highly encourage you to implement
+this or try to once again all of the
+solution is here in manual.py. So if
+during this implementation you get stuck
+somewhere you can refer to this and I
+will not be mentioning this in the
+future which is to say now we're just
+going to start imple implementing this
+and when I do step two I'm not going to
+say okay go try on your own with coms.py
+high, but I would recommend to do this
+through the entire course if you would
+like to because that's more active in
+terms of learning as opposed to passive.
+But now that I've said that, we're
+actually going to implement this
+together. So let's start off with part
+one. And once we've done this, we can
+copy paste most of what we've uh written
+here in the part two. So as you remember
+previously we have to initialize a list
+called layer layers which stores all of
+the nn.linear linear um fully connected
+layers and then we will just iterate
+over the total layers here which should
+come up here and then divide this by two
+using integer integer division because
+one thing worth noting is that if you
+divide by two like this if I just um
+open up a Python terminal and do 16
+divid by two which is what we're going
+to do in the code it gives you a float
+and I'm not sure if this will cause an
+error with range if it will
+automatically um input it as an int or
+not. But just to play it safe, we want
+to do 16 divided by two integer
+division. And one thing worth noting is
+that we're never going to have an odd
+number of layers since we can choose
+that. But if we actually do have odd
+number of layers and this will prevent
+an error where you do four in range like
+7.5 which will definitely give you an
+error. So now that we've done that,
+we're going to initialize our
+part one with the layer uh the NN layers
+as we already mentioned. So we have to
+append them n linear
+and the dim is going from dim to dim. So
+pretty simple. And then we also want to
+add a nn uhrelu which does not take any
+parameters. So I can just delete this.
+And this is everything that we need in
+terms of the layers for our nn
+sequential. So we'll say self.net
+equals
+nn.sequential sequential
+of the unpacked layers. So once again,
+the star iterator or the star operator
+just takes a list and then unpacks it,
+which is what sequential expects as its
+argument if I'm not mistaken. So if we
+come here,
+yeah, it's an order dict. I don't know
+how the exact um input requirement is,
+but what I do know is that this is the
+way that you should input it in order to
+get a proper um neural network. And then
+our forward method is already
+implemented because it's kind of simple.
+Um we didn't really need to do that on
+our own, but all we all we do here is
+return self.net of x and we don't return
+the loss. So one thing worth worth
+noting here that's already different is
+that the forward for part one and part
+two are not the same because this is
+just an intermediate step right this is
+the output of the eighth layer whereas
+here it's the output of the entire
+network at which point we calculate the
+loss you can calculate the loss at step
+8 but then it defeats the purpose of
+having 16 layers. So now what you can
+think here is that this activation which
+is called the output of this uh this
+part one neural network will be fed into
+part two and now we need to implement
+part two. But as I mentioned earlier we
+can copy most of it and then just add
+the um LLM head not the LM head but the
+um neural network head because it
+actually needs to perform the
+classification. So before we initialize
+our self.net net. I'm just going to do
+self.
+Um, what am I going to do? I'm going to
+do not self, but rather layers.append
+of
+we're going to append a nn.linear.
+And this nn.linear is going to go from
+dimension dim to dimension 2 because
+we're doing binary classification. And
+then yeah we should be fine to create
+our net which is saved as a member of
+the part two class. And then in our
+forward method we simply do the same
+step as here which is self.net ofx which
+calls the forward method on the
+sequential neural network which will
+just do a forward pass. And of course,
+as you know, we don't need to implement
+backward in PyTorch because it will just
+take the forward computational graph and
+do this in the opposite direction with
+Autograd, which will maintain all the
+gradients and all that good stuff that
+we don't have to worry about anyways.
+And then once we have this um these
+logs, which is the output of our
+classification head, it will be two
+logits, one for class zero and one for
+class one. And since we do input a
+random tensor, these logistics don't
+really have any meaning whatsoever. But
+of course, if you want to interpret this
+in like the image classification sense,
+maybe our data set is dogs and cats and
+we want to classify between these two.
+So that could be a potential example.
+But for simplicity sake, once again,
+we're just learning a random tensor. And
+then we calculate loss. Oh, and that's
+the one thing that I forgot. We didn't
+actually initialize our loss function.
+So it's great to notice that now and not
+later. So this will just be nn cross
+entropy loss. The criterion computes the
+cross entropy loss between input logs
+and targets and target. So we once again
+have the targets here but not the
+targets here. And this is because we're
+not calculating the loss in part one.
+But even so the targets are just fake um
+values. But if we take the dogcat
+example once again for every single
+input data we would have the ground
+truth because this is supervised
+learning so that the model can learn
+which images are cats and which images
+are dogs and I'm just going to check
+here. I don't think this takes any
+arguments. Um let's just look at an
+example. I would really recommend to
+look at the um typeins that pop up in
+your IDE for PyTorch. It's really really
+helpful. So once again here you can see
+that it is not um initialized with any
+arguments. And we also can call this
+self.criterion. That's a really common
+name um used here. It looks like they
+call it loss but um they use the the
+word criterion. So criterion and loss in
+this case are interchangeable.
+And now unless I'm forgetting something
+is set up such that when we do the
+forward pass through these both through
+these two networks um we will call
+self.lost lost on the logits which come
+here from the neural network and the and
+we'll compare this to the targets to
+yeah give our loss and then in the
+backward pass update our weights with
+the gradients okay so we did that now
+let's go to the next todo in this here
+in this case here oh I didn't actually
+say what we need to do so um in essence
+we are checking if cuda is available so
+what I didn't mention is that in this
+course we are going to assume and just
+use the CPU and um just shard over
+virtual cores as opposed to using the
+GPU because I don't have actually access
+to a GPU and I'm assuming that most of
+you don't and moreover to do pipeline
+parallelism you need multiple GPUs. So
+for sake of simplicity we're going to be
+using CPU as the default CUDA uh sorry
+torch device but the repository still
+has support for GPU. So if you have in
+this case two GPUs then we're going to
+implement the um proper device handling
+to allow the um model to move the
+tensors and the different um neural
+networks onto the correct device. So
+first of all we check if torch.ca is
+available. So if you come into your own
+terminal with UV run Python, I'll show
+you how to um check this for yourself.
+So first thing is I'm going to import
+torch. And you might be wondering how is
+it possible that it's not giving an
+error. And I'll just show you just so we
+can check for ourselves. If I just run
+Python 3 outside of UV and try to import
+torch, we'll get an error because I
+don't have it in the virtual
+environment. But since we do have torch
+the dependency of our um project and
+furthermore I have opened the Python
+interpreter with UV then everything's
+handled for us. So this course is almost
+becoming a UV advertisement but it
+really is amazing to use. So what I was
+going to do is I think we copied it. Oh
+okay I didn't I didn't copy it. I
+thought I copied the value. So let's
+come ahead here and copy if torch.ca is
+available. Jeez man. And then we'll see
+that it's false. Um because I don't have
+a torch uh I don't have a CUDA device on
+my computer. But if you do, then you
+would get this value here. And
+furthermore, you can see the number of
+devices available by um calling device
+count. Oh. Oh, it's because I just found
+a bug in my code. That's amazing. Uh we
+just called the fun. We just initialized
+the function, but we didn't actually
+call it. So you can see see here that we
+have zero in terms of the device count.
+So this is both checking is the device
+available and are there more than two or
+more than or equal to two because in
+this case we need at least two GPUs and
+then if that is the case then we set
+CUDA to true. So now here we can say
+that if CUDA we will do something and
+then if not CUDA we will do something
+else because we want to move our model
+which in this case is part one and part
+two onto CUDA if we do have those
+devices available. So in the case that
+we don't we don't do anything because if
+you didn't know this in PyTorch the
+tensors and models that you initialize
+are auto always um initialized on the
+CPU by default you don't have to specify
+to device CPU but if you want it to be
+on your GPU then you do so we're going
+to do here is initialize our neural
+network right part one is initializing a
+eight layer neural network and then
+we're going to do two device to
+torch.cuda.de
+device. And this will select the
+relevant GPU. In this case, we'll just
+select GPU0 because this is the first
+layer. And then uh GPU 1 because this is
+the second layer. Of course, it doesn't
+really matter. You could flip the order
+of the GPUs you put the model on. It's
+just a number for the index, but let's
+be consistent here. So now if we have
+GPUs, we're going to put the model one
+on the GPU zero and model 2 on GPU one.
+And once again, the reason for this is
+let's say in a hypothetical in a
+hypothetical case, we don't have enough
+space to store this model on one GPU.
+We're going to do that. Okay? And we're
+going to do the same for all our input
+tensors because they the the tensors
+that you input in PyTorch need to be on
+the same device as the model itself. If
+you think about it, um, if you have your
+model on a GPU and all of your data on
+the CPU, then you'll have to route all
+the data to the GPU, do the calculation,
+then route it back. This will be
+incredibly inefficient and it might even
+give you an error. I'm not sure how
+PyTorch handles this if you give it a
+mismatched input model pair. But to
+avoid anything happening in terms of
+mismatch, we're just going to do it
+properly to begin with. So let's say
+once again if CUDA um we're going to
+just duplicate this because we need it
+twice. Um tab tab and then if not CUDA
+then we do nothing once again. So we
+don't need to do anything. So let's look
+the input needs to go to device zero
+because it starts on device zero in the
+forward pass. It goes to the first layer
+of the first uh GPU. And then the target
+though if you remember is only ever seen
+by part two, right? targets is here and
+then part one never has it because it
+doesn't calculate the loss. So it
+actually goes straight to the second GPU
+and this is done here. Now let's go to
+the next todo in our training loop. All
+right here it says device switch. What
+does it mean by device switch? What it
+means is that if we are using a GPU then
+once we get our activations from part
+one which is the output of the forward
+so return self.net X then we need to
+move this to the second GPU if we are
+using GPUs. So let's do that right now.
+If CUDA
+we'll do hidden
+dot to I think we have it in our
+clipboard and then we'll change it to uh
+torch.cuda.device
+1. Okay, now that this is done and then
+we'll also do something called retain
+grad. So I'm just going to show you guys
+right now what I mean. I'm going to do
+hidden. retain_grad
+and what is this doing?
+So um here you can see I have a print
+statement which prints the requires grad
+element of hidden the grad itself if um
+whether or not it's none and then the
+grad itself. So what we need to know is
+that in pietorrch
+there are certain tensors which have
+requires grad equals true and certain
+that don't. As a general rule any neural
+network parameter has grad requires grad
+equals to true because you want to store
+the gradient such that you can update
+all of the weights during the backward
+pass. And to that end hidden actually
+will also have requires grad equals
+true. So I just realized we've done the
+implementation. So let me first run this
+once and then I'll explain what hidden
+retain grad does. So let's get out of
+the torch interpreter and we will run my
+work and if we get a bug that will be
+cool because we can debug it in real
+time. But I don't know. I'm kind of
+confident. So let's see what happens. Oh
+okay. Ah, this is amazing because I kind
+of left this bug as a booby trap because
+if we look at manual.py
+in
+our solution, what do we have? Oh,
+actually no, let's not look at the
+solution yet because I don't want to
+spoil it. If we look at the monolith, we
+have optimizer equals optim atom
+model.parameters and that's it. So first
+of all we know that we are missing
+something because we don't actually
+select the par parameters but also
+there's something else. So first of all
+let's just add the parameters because um
+currently we're just giving it the n
+sequential itself and the optimizer
+doesn't know what to do with it. So
+where are we actually initializing our
+optimizer right here. So let's do
+dotparameters
+and we need to call this and then we
+also need to convert these into lists
+both of them because we're adding them
+and um yeah you can't actually I would
+like to see what the error is because I
+didn't ever check this for myself but
+you can't add parameters
+um between because they're generators
+you can't add them to each other but now
+if we convert these generators into
+lists which will just iterate over the
+entire generator and then give us all of
+the output parameters of each of these
+two neural networks works then it should
+work
+unless we do another thing wrong. Okay,
+I have a comma here. Why do we have a
+comma here? I don't actually know why.
+Ah, it's because the comma should be
+there. Okay,
+let's see. All right, so it works now.
+And so the optimizer is fine. Now this
+is the the kind of trap that's in the
+code. So we can first of all see
+something really cool which is the fact
+that the final loss here is the same as
+the loss for monolith. So let's look if
+you forgot um it's the same. And in
+terms of the time we can run it once
+more time once more to see how long it
+takes. I wouldn't really bet I wouldn't
+really put too much um weight into the
+timing here because once again you can
+see here it was actually 0.1 seconds
+faster than the first run. And my guess
+is that it's cached some values in my
+Mac and makes it go slightly faster the
+second time. But in any case, what's
+worth noting is that since we do have
+the manual seed set up to 42, then
+everything is great in terms of the
+reproducibility.
+But more important than that, let's come
+back to these print statements. So let's
+see what happened here. We had let's
+first try it with retain grade grad
+equals false because you don't even know
+what this means yet. So we'll just see
+what the what the um output is without
+anything colluding it. So first of all
+we have print hidden. grad which is
+true. And the reason why this is true is
+because when we have a output to of a
+neural network module in the
+computational graph the output of a
+calculation which is itself created by
+parameters which require grad will also
+require grad. This is just how um the
+require grad inherits from its children
+essentially in PyTorch. So this will
+always be true for hidden. We don't have
+to worry about that. And what this means
+is that when we do loss backward,
+we don't have to worry about the
+gradients not flowing from part two to
+part one. And now I'm going to check
+something which I don't actually know if
+it'll work, but I'm still going to try
+it. And what I'm going to try is to say
+hidden.requires
+grad equals false and see what happens.
+I haven't tried this myself, but it just
+came into my mind. In theory, this
+should break the connection between part
+one and part two um because now we will
+no longer be storing the gradients um
+between the two. But let's see what
+actually happens in the code. Okay,
+let's see what we'll see what it says.
+Runtime error. You can only change
+required to grad flags of leaf
+variables. If you want to use a computer
+variable in subgraph that doesn't
+require differentiences, use ver nograd
+equals ver detach. Okay. Um
+I see. Okay. Um
+essentially it's telling us that we
+should detach hidden which will remove
+it from the computational graph. And
+let's see what happens now. I think it
+will give us an error. Okay.
+So the error we actually got is
+incorrect because I forgot to change
+hidden equals hidden. Instead of saying
+hidden requires grad because um we want
+to change the entire tensor. And here
+okay we can see that exactly as we pro
+prophesized
+um the training loop is messed up. What
+I'm trying to say here is that the back
+um the loss is not propagating backwards
+from our model in um part two to part
+one. And this is because we detach the
+model here. And now if I print hidden
+requires grad, what happened? Um
+hidden.requires grad, we'll see that it
+should be false. And this means that
+when we actually do back propagation,
+there's no learning happening in part
+one. So let's just run this once and see
+what what it says. Um the Bula object is
+not callable. That is that is true. It's
+not callable.
+Okay, it's still not callable. Did it
+not update my code? Print
+hidden.requires_grad.
+Um okay, boom. Yeah, I I printed way too
+many times. You can see that's false.
+And at this point, what this means is
+that somewhere in the computational
+graph, PyTorch is kind of just fumbling
+around. Doesn't really know what to do
+because we detached. And when we detach
+a tensor, um, it loses its gradients and
+sets requires grad equals to false as
+you see here. So, this was just a mini
+experiment, which is really cool. Now,
+let's get back to the subject of step
+one, which was if we remind ourselves to
+calculate with part one and part two and
+get back this final loss. But even
+though requires grad equals true in this
+case what we notice is that we have our
+gradient um equal to none which means
+it's false and also we have no hidden
+grad and this is because after the
+backward pass python uh rather pytorch
+no longer needs the gradients of
+intermediate activations which hidden is
+in this case. So it will empty them to
+save memory which is really good. But
+what we need to know is that when we
+actually do pipeline parallelism here,
+we will be moving um with a
+communication primitive which is just
+called dist. send and disc.receive in
+the message par passing interface which
+is just the python pietorch sorry way of
+communicating between different models
+and devices. In this case,
+we will need to send our hidden
+activations between the two models
+because the activations are used in
+order to calculate the partial
+derivative of the loss with respect to
+those activations aka inputs so that we
+can propagate them back uh so that we
+can propagate the locks backwards
+through the graph. And even though we
+don't need to set retain grad to true
+for this network to learn, it will just
+print what the model is actually sending
+backwards. So let's come um here. And
+now we can see that once we say ret
+retain gradients true, it actually
+retains it in the um hidden.grad
+element um of our tensor and it is just
+here. So first of all, you can see
+hidden grad is not none. So it's true.
+And this tensor are the gradients of
+hidden which in the pipeline parallelism
+that we'll be implementing very soon
+will be sent backwards from part two to
+part one. And if you want to know what's
+sent forwards from part two to part one
+then we can just print hidden itself.
+So
+we can see that this is the vector that
+is sent in the forward pass. It's the
+actual activations of hidden just this
+because um we can see that when we input
+our hidden vector into part two these
+are the activations of itself. The input
+to the second model and then the
+gradient which is in the backwards
+direction is something else because the
+gradients are the same dimension as our
+um hidden um input activations but they
+are instead telling the model how to
+change the weights of our model in order
+to decrease the loss. And one last thing
+that I'm going to do is calculate the
+shape just to show you guys that the
+gradients and the model itself have the
+same shape. So let's look at this real
+quick together. Um 32128 32128. So there
+you go. We have now implemented the step
+one manual which all it does is make on
+a CPU two fake models and splits them up
+um in the middle and then does the exact
+same loose uh does the exact same loop
+sorry as manual.py which is right here.
+And if you actually have a CUDA GPU then
+you can do this for real with all of the
+device management which is really cool.
+So if you do then please let us know how
+that goes in the comment section. And
+now we can move on to step two. So now
+that we've done the manual we can see
+that even on one machine you still have
+to manage the handoff of the activation
+and the gradients. And just to highlight
+where that happens um the handoff of the
+activations happens here. And then in
+fact the handoff of the gradients is
+done by backward. So we don't really
+have to handle that. So I should
+probably modify the outline to rectify
+that error. And now we've done that,
+let's talk about distributed basics. So
+in this stage of the course, we're not
+so much going to be implementing
+pipeline parallelism as implementing the
+communication primitives which are in
+this case the send tensor and the
+receive tensor functions so that we can
+actually communicate between our
+different GPUs and send the weights
+between them. Okay. Okay, so the
+distributed basics comprises three
+things. Rank, world size and process
+group. Let's go from bottom to top. The
+rank is just the ID of your GPU. So if
+we have four GPUs, we have ID 0123.
+That's simple. The world size is the
+number of GPUs. Very simple as well. But
+then there's also the process group
+which is um used in PyTorch in order to
+establish the group which inside of
+which we will have our communication. So
+this may or may not make sense as of
+right now but once we implement it then
+it will be much clearer. So let's come
+and open up our step two comps and get
+into the implementation. So let's look
+at the function that we have. First of
+all we have first of all an init
+distributed which initiize initializes
+the distributed process group. Once
+again, this is the stage where we have
+to call init process group and
+initialize the communication or the
+conference call if you'd like to say it
+that way. And then if we come back to
+step two comms, we read the state
+directly um from the environment
+variables set by torch run as well. And
+this is already done for us because it's
+not really interesting to mount this on
+yourself on your own. So what is torch
+run? First of all, if I just come here
+and say UV run torch run, we'll
+obviously get an error because we
+haven't given any arguments. But torch
+run is how you execute distributed code
+in PyTorch. Which is to say, as soon as
+you have more than one GPU, you can no
+longer run a single file main.py across
+all of your GPUs. you actually need to
+run one one um process of each file for
+each device. So what torch run does in
+in essence is it creates a copy of your
+script for every single GPU and then
+runs on that GPU. Okay. And this is why
+it actually gives us a local rank. So
+when you think of step two coms which is
+going to give us our communication what
+you should really think of is four
+copies of this file for the four GPUs if
+we're going to use this example which we
+are and for this reason
+we'll get local rank from 0 to three
+inside of this init init distributed
+method and furthermore we get our world
+size and our rank and as the comment
+says here once again it's set by torch
+run. So these environment variables are
+initialized by torch itself. We don't
+have to worry about that. But now this
+is done. We still have work to do which
+is to say um set up our device. If we're
+using a GPU then we need to set our
+device to CUDA. If not then it should be
+CPU. So the best way to do this is
+device equals
+CUDA
+if
+torch.CUDA CUDA
+is available or I think we just do
+is unavailable. There you go. And then
+it will be CPU otherwise.
+So one thing that I didn't mention is
+that we should specify the device itself
+and we have local rank. So very
+conveniently we can just specify local
+rank here and we also need to add a
+colon. So in essence when you have a
+device and multiple GPUs in PyTorch you
+just specify which device it is by CUDA
+comma 0 for the zero GPU CUDA comma uh
+sorry CUDA colon one for the one GPU. So
+we're just going to do this and in this
+code we're just going to assume that you
+have four GPUs. Um we can also add a
+condition if the device count is less
+than or equal to four. If it's less than
+four actually then return an error but
+let's just keep the code simple for now
+and then we'll initialize the group. So
+once again it's going to be dist.init
+process group. So let's look at the
+let's look at the method um description
+here
+and see what it says. Okay, this doesn't
+seem too um easy to read. I don't know
+where the uh there you go. It went. So
+it initialized the default distributed
+process group. This will also initialize
+a distributed package. There are two
+main ways to initialize a process group
+etc etc. We already know how to do this.
+Um in essence okay it doesn't have any
+examples but in essence this is what's
+going to establish our communication. Um
+you can think of it as the conference
+call between our different GPUs. So the
+back end will depend on the type of
+devices that we're using. So here we
+actually need to check again if we have
+our uh device if if we have GPUs
+available and then if not we're going to
+do something else. So here and then else
+and we're going to do a different type
+of dist distributed um init process
+group call. So
+if we have GPUs, which is the case here,
+then we're going to use the NCCL back
+end, which stands for the Nvidia
+collective communications library. And
+this is just how GPUs communicate with
+each other. And then the second argument
+is what the init method, which we're not
+going to use. We're going to use the
+first way, which is to specify store,
+rank, and world size. And store here is
+the type of communication um back end
+that we're using. So, we just input rank
+and world size here as we already got
+them from torch.run and then world size.
+Boom.
+And then I'm just going to copy paste
+this here except we're going to use
+glue. So, if you look back at the
+different types of communication
+backends that are supported, we have
+MPI, glue, NCCL, UCCC, XCCL.
+Notably, you'll see that MPS is not
+supported. So metal performance shaders
+which is used in silicon max. Um so even
+me using my Mac I was unable to try this
+on the GPU because we don't actually
+support distributed communication yet in
+PyTorch on MPS. So in this case even if
+you have a Mac silicon chip you still
+have to use a CPU with glue which is the
+communication um platform that we have
+to establish here. Okay. So now this is
+actually everything we need to do in
+order to initialize this distributed
+process group. So let's give oursel a
+pat on the back and we just return rank
+world and size uh sorry rank world size
+and device for later reference. And then
+now in pipeline columns we have a few
+things that we need to check. So
+first of all, we have our init method
+and we want to come ahead and save our
+rank as well as our world size because
+this is what you do in an init in method
+in um in a few words. And then okay,
+that's weird how it did world twice.
+Anyways, there you go. And then what
+we're going to do with these values is
+say whether or not we are the last or
+the first GPU because it's very
+important. Why is this important? For
+example, the first GPU does not send any
+gradients to a previous GPU because
+there is no GPU before it. And the last
+GPU does not send any activations to
+another GPU because there's nothing
+after it. So we'll just say self.last.
+I forget what we said in the official
+library, but it doesn't really matter.
+Uh, equals
+self. It doesn't equal self. U, so if
+you want to check if the GPU is the last
+one, we'll just do um self do world size
+and um then we'll take self.rank
+and we'll say is this the is this the
+same as self.orld size minus one. So if
+we have four GPUs and the rank is three,
+then three equals 4 minus one. And this
+is when we want self.last to be true.
+And I did say that we don't want to look
+at um the coms.py sheet, but I really
+want to quickly check what we called it.
+Uh we called it previous rank. Okay. Uh
+no, we didn't call it that.
+Okay, we did call it that. So I just
+realized we don't want to use self.last
+just yet from seeing that. We're instead
+gonna call them something else. And then
+this will be much more useful. So
+self.pre rank is going to be the value
+of self.rank
+minus 1 if self.rank
+not equals
+zero else none. So this is how we're
+going to check if for example you're the
+first GPU. If the previous rank is none,
+that means that there's nothing before
+you. And then now we can check with this
+condition here. So sorry for that mixup,
+but um it will just be self.orldus one
+or um self.rank
+if or self.rank + one
+if the following condition is true. If
+we have
+this self.orld world size.
+Um, shoot. Sorry for this um, blooper,
+guys. I really need to copy this
+instead. So, there you go. And since I
+confused you guys slightly, let's just
+go over what we just did. So, the
+previous rank, oh, we need to call this
+next rank.
+The previous rank is equal to self rank
+minus one, which makes sense. If you
+rank one, then your previous rank is
+zero. If you're not the LA, if you're
+not the first GPU, otherwise it's none.
+Here the next rank is the self.rank plus
+one. If you're not the last GPU
+um so we need to change this to not else
+it's none. Okay so this is all set up
+really well. Now we will come and
+implement these four primitives. What
+are the four primitives? First one is
+send forward send of activations next
+GPU. Next one is receive activations
+from the previous GPU. After that we
+have send gradients back to previous GPU
+and receive gradients from the next GPU.
+So what you notice here is that every
+single function has a receive and a send
+because if you send something to
+somebody then you also need to have the
+corresponding receive function and for
+send forward and send backward. It's
+really simple. We just come here and do
+dist send and it will send a tensor sync
+send a tensor synchronously and all we
+need to specify is a tensor itself that
+we want to send which is a argument of
+our function so we don't even need to
+specify it but more importantly we need
+to specify the destination so that is
+simply the ID of the GPU that we want to
+send it to and let's just come here
+input our tensor and then input self
+next rank since we're sending to the
+next GPU.
+And one thing that I'll say right now is
+that of course if you called this on the
+last GPU, you'll get an error, but we're
+going to add the conditional statement
+not here, but in the function that calls
+it. It will just make the logic slightly
+simpler. So, and it will also make the
+the code more readable. So, we're just
+going to do that. With that being said,
+we have finished our first function. So,
+that's great. Receiving is slightly more
+complicated. You'll see that we have not
+only a sh a shape device but also a
+dtype. So three parameters and this is
+because we need to specify the tensor
+which we are going to receive the data
+onto. If you ever use maloc and c this
+is kind of like a really tuned down
+version of what we have to do with maloc
+which is to say like specify a block in
+memory. So we'll return a tensor um
+first of all because when we receive a
+tensor
+from receive forward we want to actually
+return it back to the function that
+called it so they can actually get the
+tensor. When we send something we don't
+need to return anything because we're
+just sending it a value. But when we
+when we receive something we need to
+return that value that we received. So
+what we do here is tensor equals torch
+dozer.
+So we just want to initialize a vector
+of zeros. You could do also torch ones
+or torch.rand. It actually does not
+matter. And then we will put the shape,
+the shape,
+the device, and the data type.
+Okay. And though this will mean that the
+um tensor will be mapped onto the proper
+device. If you're using a GPU, it'll be
+mapped on the GPU and then it will also
+receive the correct data type.
+But so far we all we did was return a
+tensor of zeros. So now we need to do
+distress
+receive and what are the arguments to
+this function? We have the tense that we
+just made. So tensor
+and then the source. So where is the
+source? Since we're receiving forward,
+we have to receive from the person
+that's previous to us. So self previous
+rank. All right. So now we have two
+functions down. Let's go down to send
+backward. This one will send gradients
+back to the previous GPU. So we need to
+send to the previous rank and in fact
+this function is almost identical except
+we will change next rank to pre rank. So
+you can see that these functions are
+yeah kind of mirrors of each other and
+we can also just copy paste this to
+receive range from the next GPU. So um
+if I'm not mistaken what we need to
+change here is just previous rank to
+next rank and we'll go over it once to
+make sure that we are doing it properly.
+So what's happening here is that in
+receive backwards we're receiving from
+the next GPU we initialize our tensor to
+zeros uh receive it from the previous GP
+from the next GPU sorry and then we
+return that tensor. So just like that
+we've actually already implemented coms.
+So you should be proud of yourself cuz
+we're already two steps into our course.
+And one thing that I wanted to note is
+that if you look at the type hint of
+these distributed protocols or
+primitives, you say it says it says
+receive the tensor synchrony both for
+this. receive and sends a tensor
+synchronously.
+So when it says this, of course, you
+think that there's an asynchronous
+method, which there is.
+And this is what's used in production
+because when you have asynchronous
+processes then you can essentially
+overlap computation with comp uh
+computation with communication more
+effectively but it also imp it also
+introduces much more complexity. So for
+the purposes of this course, we're only
+going to use synchronous oper uh synch
+synchronous operations, sorry. And what
+this means is that when we call receive
+backward,
+as soon as we reach this method, the
+code will not go anywhere until it
+actually gets the tensor that it is
+supposed to receive. So what you can
+imagine is that if we're running with
+two GPUs and we're waiting for GPU 1, so
+the first GPU to do a computation and
+then we need to receive the forward from
+GPU 1, we're going to be waiting here
+the entire time at distop receive in the
+second GPU until the first GPU sends it.
+And once again I want to emphasize that
+here I don't know why we have this in
+the top here
+we have two copies of this file one copy
+with local rank zero and one copy with
+local rank one because torch one makes a
+copy of each script for distributed
+training or inference whatever you want
+to do. So just to be extremely clear on
+this point as soon as we run something
+with torch run let's say two process
+nodes which is two devices that could be
+two GPUs any script that is implemented
+as its argument such as these coms will
+be run in two separate instances once
+for the first device and another for the
+second device with local rank zero for
+device the first one and local rank one
+for the second device and when we come
+down here let's say that we're running
+the part one and the part to sharded MLP
+in the entire first part. The second GPU
+is simply stuck at this receive forward
+function because it's waiting to get the
+activations from the first GPU so that
+it can compute its own activations on
+its part of the model which means that
+until the first model computes the GPU
+and calls send forward to do this disc
+send to next rank which in this case
+will be one because we have zero then
+the next rank will be one. This entire
+time the GPU1 is just waiting here to
+receive the tensor from the previous
+rank. So nothing's happening. It's just
+waiting because it's synchronous. As
+soon as it does receive that um value
+from the first GPU, then it will
+complete this function and then return
+the tensor and then start its own
+activation um forward pass. So you can
+do the exact same logic or reasoning
+here for the backward set of uh
+distributed communication primitives but
+in that case it's the reverse order.
+It's that the first GPU has to wait for
+the second GPU to give it its gradients.
+So there you go. I once again want to
+emphasize this because it's not easy to
+think about distributed code because you
+have to picture two instances of any
+script if you have two processes or if
+you have even more you have to picture
+four happening simultaneously. So I hope
+this makes sense. So now that we have
+comms done, let's go back to our
+syllabus and see what's next. So we're
+still in distributed basics, but now we
+have a lab which is to spawn two
+processes on GPU or CPU and ping pong a
+tensor. And this is the this is the
+command that we're going to use to run
+that. So let's come and open our um
+step three which is called ping pong.
+Okay, so you can see it's pretty bare
+bones. So we unfortunately have to do a
+lot of implementation here. But let me
+give you an introduction to what we need
+to do and it's pretty well documented
+here in the dock string. It says send a
+tensor from device rank zero to device
+rank one and print to verify that you
+actually sent it. So we can see that I
+already have the conference call uh
+establishment which is just incorre
+distributed which will set up the
+collective communication between these
+two devices. And this will return rank
+world size and the device that we're on
+just as we set it up if you recall here
+which is important.
+And then we're going to use this to
+decide which device that we're on and
+output the corresponding um value. But
+before we do that, let's just see what
+happens if I print these values. So
+print rank world size and device. And
+we're once again going to use torch run
+here. So torch run, sorry, UV run torch
+run because we didn't activate the
+virtual environment. Torch run on its
+own doesn't work. But if I do UV torch
+UV run torch run with the following
+parameters. So you can see here we have
+n pros per node and all this means is
+that how many GPUs do you have or CPU
+processes. So we have two in this case
+and then we need to specify the file
+that we want to run. You can see here
+that this is the training script. So I'm
+going to come into my work and step
+three is what we're going to run. So
+just to verify here we have two GPUs and
+or two virtual GPUs. In our case we have
+CPUs. And you might be wondering what's
+nodes that's the number of computers
+that you have or number of clusters. So
+maybe you have two clusters of two GPUs.
+In that case, you would do number of
+nodes two and number of processes per
+node two, which gives you four GPUs in
+total. But we don't have that in this
+case. So we're just going to run torch
+run. And it looks like ah I realized
+that we don't have this working because
+we're in the wrong we're in a different
+directory. So instead I need to say
+step2.com. So this is good um because we
+will change this for the course. So, by
+the time that you've read this, it would
+actually be step three um underscore
+comps.
+Sorry, step two underscore comps. I
+can't read. And now it should work.
+Let's see what happens.
+Okay, guys, we got a bug. That's cool
+because now we can deb debug it
+together. So, what went wrong? Oh, okay.
+No, that's not the error. What is
+actually is there? Let's look at the
+error, guys. together.
+As you can see, torch run error logs are
+not the simplest to read. Ah, okay. So,
+we have a bug. For some reason, it's
+trying to initialize a process with
+nickel even though we have a CPU. So,
+why is that happening? Let's come and
+see because I think I have the logic
+reversed. Then device equals
+CUDA if torch dot is available and then
+this we will init the process group with
+nickel if torch.cuda is available else
+dist with glue and rank world size.
+Actually this does look correct. Let me
+just um ah of course the fact is that
+with this type of um conditional
+statement it will still call this um if
+I'm not mistaken. So I think we need to
+just make this a um make this a strict
+conditional statement and this may fix
+the bug. If it doesn't then we'll try
+something else. But let's see what
+happens now. No. Okay, that was not
+there. I think then I've misread what's
+happening here.
+Okay. No, it is better now. We have glue
+and then
+what else is happening?
+Right. I can see now our error was quite
+obvious is that we didn't wrap these
+strings around the torch device call. So
+literally our device was the CUDA string
+and it wasn't the uh CUDA torch.
+CPU. So now if I fix this, it should
+work. Let's try one last time. Okay, now
+I finally realized the other error is
+that we need to use keyword arguments to
+establish these values of rank and world
+size because they're not the actual
+second and third arguments in the code.
+So we'll say rank equals rank and then
+world
+underscore skies equals world size.
+Okay, now I promise this will work.
+Please work. There you go. Okay, so we
+have a working version of the code, but
+now we need to actually implement the
+ping pong itself. But what I wanted to
+point out is that we now get a strange
+input which is to say
+the two values are
+printing one on top of the next. So if
+you look here, we'll have rank in this
+case is one for GPU number two and then
+the world size is two and the device is
+CPU and then for world size with rank
+zero it's 02 CPU. So you might be
+wondering why aren't these printed
+nicely and they're kind of interled.
+It's because well if we try this one
+more time we might get it happening. So
+you can see even here that we have oh no
+this this time we get the same result
+right you can see now we have slightly
+different result it's because when you
+have this distributed framework with the
+way that the memory and the buffers are
+loading this information it's not
+actually deterministic so finally I got
+it um this time we actually first
+printed zero to and CPU which is for
+device zero of rank zero and then one to
+CPU which is for device of rank one and
+this is just to show you
+When you do this, sometimes the print
+statements are working in a strange or
+asynchronous way. And this is because
+we're running distributed code. And
+lastly, I want to once again highlight
+the fact that we are running two copies
+of this file. So we have one copy
+running on device 0 and one copy running
+on device two. Sorry, device one. And
+for this reason, we get two print
+statements even though there's only one
+print statement here. And I have never
+tried this myself, but if I think if if
+we run just the file on its own, we'll
+probably get an error because um we need
+to use torch one when we're running
+distributed code. But let's just see
+what happens um to make sure that it
+does give us an error.
+All right. Yeah, it doesn't know where
+the rank is because right if we come
+here in coms.py, the rank is initialized
+by torch run. Okay. So now we have this
+done. Let's actually check what device
+that we're on. So if device equals
+equals zero, we'll do something. And
+then I don't want to do it three times.
+If device equals equals 1, then we want
+to do something else. So in this case,
+the function says send a tensor from
+device rank zero to device rank one and
+print to verify. Okay, so what we need
+to do first of all is a tensor creation,
+right? We want to actually make the
+tensor. So we'll just do tensor equals
+torch
+rand of three. And what does that give
+us? Actually, we'll just see very soon.
+It'll just be a random tensor of three
+values. And then
+we're going to say um tensor. So one
+thing I forgot to do is actually
+initialize our communication um class,
+which is pipeline comms. Without doing
+this, then we won't be able to actually
+perform the communication. This is the
+class which gives us gives us our
+primitives. So we need to give it the
+rank and the world size.
+Boom. And then now we're going to do
+communication
+dot
+send forward.
+And then
+we're going to send a tensor. And since
+this does not return anything, then we
+we don't need to return anything um
+because that's that's not what we do
+when we're sending. We don't We don't
+want to capture any values. We only want
+receiving. And we'll say print
+sent tensor
+tensor. So this will only once again
+work if local rank is equal to zero.
+Okay. I just realized I put device
+instead of rank. So this should be rank.
+And then now we will do
+first of all uh communication dot
+receive forward of the tensor but we
+need to know its shape. So the problem
+here is that when we run this code on
+the device of local rank one it will not
+know what the shape is since we have
+initialized it in the rank equals zero.
+So let's just take this out of um let's
+just take this out of the oh no we don't
+want to take it out of the the if
+because the whole point is that we only
+want it to exist on the device zero and
+then set it to device one. So instead
+we're just going to assume that we know
+the shape which is set to three. So what
+again once what are once again the
+arguments here? I forgot uh the shape
+which is three and then the device which
+is device and we already have that as a
+parameter of the return to init distri
+distributed and then dtype is optional.
+So now we can say print
+received tensor and then the tensor and
+now if you run this it should actually
+work which is amazing.
+What did we do? I think we still have
+something that I wanted. Ah, yeah. We're
+not actually using torch run. Of course,
+guys, we need to use torch run when we
+want to run distributed code. Okay, I
+keep on saying we're not going to get
+errors, but we do end up getting an
+error. And it's because we never
+actually Okay, first of all, we never
+actually captured the tensor, and I
+think that's the error.
+Yeah, it is. Okay.
+So, first of all, you can see we set the
+tensor of this
+and then we received it here. And this
+is only possible because we have
+implemented descend forward and receive
+forward. Otherwise, it wouldn't work.
+And we can actually just change these to
+backward because we're not actually
+doing any backward passes right now. Um,
+it should be the same. Let's see.
+Yeah, it should be the same except the
+one problem is that the direction will
+be flipped. So, if we do send backward,
+then we'll have to change the device
+check. So, let's change this to
+backward. I'll show you. We should get
+an error here because this should be
+rank one and rank zero, right? But if we
+change this to rank one and this to rank
+zero, then now we're sending it
+backward. So it actually works. And this
+is really amazing to see. We receive the
+tensor of this and we sent the tensor of
+this. So this is the ping pong example
+which establishes the communication
+which we need to use when we actually
+have our pipeline parallelism um
+splitting up the models and sending the
+data between them. Something I really
+want to quickly introduce before we move
+on to the next point though is something
+called torch.distributed.
+And what this does is it forces as we
+can see here the processes to wait until
+the entire group enters this function.
+So this is mostly useful for
+asynchronous code where you have many
+processes happening in different uh
+speeds and you want them to all reach a
+certain point before they move on to the
+next one. So this isn't extremely useful
+for synchronous code but it's still
+interesting to implement it and see what
+the effect is. So the first thing I want
+to try with this is to put it within one
+of the conditional statements of the
+different device ranks and see what
+happens. So if we just go UV run torch
+run, I think this is what we want. And
+what this will do is it will cause the
+code to not um terminate. And why is
+this the case? It's because once again,
+as we read it says it waits until the
+whole group enters the function, which
+in this case is these two GPUs or these
+two devices. In our case, it's two CPU
+cores because while we're not splitting
+on GPUs, we're splitting on the cores of
+our CPU. But if I now come, you can see
+that this code will never actually
+terminate because it's waiting forever
+for the first core of our CPU to enter
+this um barrier. But it it's actually
+not going to get it because it's only
+happening if you're on rank one. Now, if
+we duplicate this and put it down here,
+we'll see that the c the code will run
+as expected. So, let's terminate this
+process and go through it. Boom. So as
+soon as the two devices reach this
+barrier then um they will continue on.
+So this is really good once again for
+synchronizing asynchronous code but
+since our code is already synchronous it
+doesn't really make a difference. And
+one last thing I'll show you is that if
+we put this before the conditional
+statements then both of them will see it
+at that point and the code will also run
+properly. So if you're ever looking into
+implementing these primitives in an
+asynchronous way, then this is a cool
+method that Torch implements which
+allows you to temporarily make your code
+synchronous. So there you go. Now we
+have done step three. So we're 60%
+through the steps in this course. I will
+note though that the step five um is the
+longest. So let's not get too happy. But
+now that we've done this, we are going
+to first create the model which will be
+sharted along the amount of device that
+we have. So in this class which is step
+four.py, this is once again um mirrored
+here. So you saw it's only 35 lines.
+This is going to be really simple to
+implement and really quick except the
+input parameters here are slightly
+different.
+uh as opposed to the step one where we
+had the part one and part two. You can
+see here the net method only has dim and
+depth but in here the net method has
+hidden dim total layers rank and road
+size because we need to know which GPU
+we're on in order to determine um how
+many layers that we need to make. Okay,
+so first of all calculate how many
+layers this GPU is responsible for. And
+this is pretty easy. um we'll say number
+of layers is equal to the total layers
+divided by the world size. So the number
+of GPUs that we have divided by so the
+number of layers we have divided by GP.
+So if we have 16 layers and four GPUs
+then it's four layers per GPU. Um let's
+just call this number of layers. And
+then what we want to do is build the
+stack of local layers. So this is going
+to look really similar to what we did
+earlier. So because of that I'm just
+going to come into my copy paste history
+and paste it here. Of course we'll have
+to change a few things. So we'll say for
+i in range
+number of layers because we've already
+calculated it. So even before we
+actually did the division um and one
+thing I just realized is that we should
+make this integer division instead of um
+float division. We will take the dim. So
+here for some reason we have a we have
+it set to uh hidden dim but we'll just
+change that to dim. The total layers.
+Okay. So this is all set up. But one
+thing that we need to know and don't
+don't uh forget is the fact that in this
+case when we had part one and part two
+we had two copies of it. So we could
+hardcode the logic. But in this case we
+just have one model. So we need to have
+a conditional statement which will check
+in essence is this the last model? Is
+this the last GPU? And if that's the
+case then we need to add the head. Um so
+that's one thing that we need to know.
+And then if it's the last GPU we also
+need to add the loss function. So this
+is what every single model gets. It
+always is the same. But if we are self,
+so if self oh we don't even need self
+self. We just have the input uh as rank.
+If rank is equal equal to world size
+minus one, then we need to do everything
+required for the last model which is
+just to say self um not self but rather
+layers.append
+append a nn sequential
+of
+what size well it's going to be size dim
+to two and right now there's a bug in
+our code
+I want you to see if you can find it
+it's on line 14 so maybe that's a hint I
+mean it's a pretty obvious hint um so if
+you found it congrats what we need to
+realize is that right now we have our
+selfnet initialization before we
+actually finish adding all the layers
+because if we do add this layer then it
+will never included in the model. So we
+need to move it down. Um if you are not
+on the last GPU then it doesn't make a
+difference. But if you're on the last
+GPU then it does. And then now we'll
+also just initialize our loss function.
+self.loss fn equals nn.
+Entropy loss and we need to call it
+because it's a function. Boom. So this
+is everything um that we require for
+building the local stack of layers. Once
+again, the number of layers will be four
+instead of 16 if we are from GPU 0 to
+GPU 2, but then it'll be five for the
+last GPU because we do have the um
+classification head here. And now let's
+implement forward. So first of all,
+every single
+model that is on every single GPU needs
+to calculate activations. But now we
+need to say are we calculating the loss
+because in that case um we need to
+return that if we're the last device. So
+first of all we want to return x in any
+case but in this case we want to modify
+x. So we'll first check if self
+dot
+rank
+is equal to
+world
+underscore size minus one. So I just
+realized we do definitely need to store
+these values in our init method. So
+let's come here and say self.rank rank
+equals rank and self dot world size
+equals
+world size. Give me that type in there
+you go. If that's the case then we want
+to calculate the loss. So self.loss fn
+is
+e on x and targets. So that's the the
+parameters that uh
+the cross entropy loss takes. You can
+see that huh one second let's look once
+again right so we have loss of the input
+and the targets as our cross entropy
+loss so we want to do the same thing
+here if that's the case and we just take
+that over x which are the activations so
+you can see that now we will calculate
+loss if it is um the last value and then
+if it isn't we just do the activations
+and then pass it on to the next. And
+this is how the forward method works. So
+now you can see that we have made this
+file. I think that it's six lines
+shorter because we have less comments.
+But let's just make sure. Yeah, there's
+quite a few comments here. One thing
+that I just see here is that targets is
+not none as a check that you can add. So
+target should always be none if you are
+sorry. Target should always not be none.
+should be something if you're last GPU.
+But you can also just add and target
+is not none in this case to make sure
+that you actually have targets to
+calculate and not just put them in as
+none. So here we've now implemented the
+model which is going to be used in our
+scheduler. And now we're finally at the
+stage we're going to be implementing the
+pipeline parallelism given that we've
+added all of our primitive uh functions
+and the communication primitives that we
+need in order to communicate different
+between different GPUs. So this is
+really good news. Let's come into our
+outline. I don't know why we got out of
+there. And let's learn what the naive
+solution is. So if we come here, we're
+going to have some some code and let's
+talk about naive model parallelism. So
+naive model parallelism or pipeline
+parallelism, this is the same the same
+word in in in effect is the most
+straightway of implementing pipeline
+parallel training. What we do is we
+split our model into multiple parts and
+assign each one to a GPU as we've
+already discussed. And then we train
+inserting communication steps at the
+boundaries when we've split the model.
+So I'll already kind of give a teaser.
+This is the boundary where we have the
+communication and then we only use node
+to node communication which is sending
+and receiving and don't need any
+collective communication privileence
+which is really nice. So, if you've ever
+heard of an all gather, this is how you
+can synchronize gradients between
+different models. And this requires many
+different GPUs to communicate
+collectively. But because we're only
+sending and receiving, it only requires
+two GPUs. And what this means is that we
+don't have to worry about um
+disynchroniz or unsynchronization errors
+or weird things happening because we're
+sending things and receiving things
+between many different GPUs. So, let's
+go through the entire stage. First of
+all, starting with the forward pass, we
+compute intermediate on GP1. So this is
+what's actually happening here. Um, and
+then we transfer the resulting tensor to
+GP2. This is the send operation here,
+but it's also a corresponding receive
+operation on this GPU. And once we
+receive it, GPU GPU2 computes the loss
+of the model in this stage here. And all
+the while it's caching its activations
+so that it can compute the backward pass
+faster. And then during the backward
+pass, okay, we're going to be going
+downwards. So the GPU calculates the
+derivatives of loss with respect to its
+weights in the input. So the loss is
+calculated with respect to its own
+weights W4 and W3. But then it's also
+calculated with respect to the
+activations which are given to it by the
+first model. And then GP1 once it once
+it gets those um values those gradients
+completes the backward pass by
+calculating the derivatives of the loss
+with respect to its own weight and
+that's once again based on the gradients
+that it was sent. So this is a very good
+diagram by Simon Bow which explains this
+entire process for G two GPUs, GPU 1 and
+GPU 2. And this is a pebble graph which
+will show us also three things which we
+want to address throughout this course.
+So first of all there's low GPU
+utilization because at any given point
+only one of the GPUs is being used. The
+other GPU is waiting. So right now GPU 2
+is doing something and GPU one is
+waiting and now GPU 2 is doing nothing
+and GPU 1 is doing something. And then
+there's also no interle of communication
+and computation because of this waiting.
+But if you look at some of the more
+advanced pipeline algorithms, you do
+have multiple GPUs doing work at the
+same time. This is possible if you
+overlap communication with computation.
+And then also has a high memory demand.
+And why does it have a high memory
+demand? This is because GPU one has to
+store the activations for the entire
+model in its um internal state while it
+waits until GPU 2 will give us give it
+the um gradients for the backward path.
+So you can see this cache is full until
+GPU 2 returns back with the gradients.
+And this means it has a high memory
+demand and we're kind of not actually
+taking advantage of the fact that we're
+having many GPUs because we still have
+to store the cache the activations for
+the entire model on GPU1 while we wait
+for GPU 2 to get back to us. So these
+are pretty unidal circumstances. And
+even though these are un ideal, we're
+still going to start off with the naive
+model parallelism implementation because
+it is quite intuitive and easy to
+implement. And before we go and
+implement the naive solution, I realized
+that we didn't show you the graph of the
+computation itself. So as we're going to
+use four devices, you can see this is
+how it's structured. This is not too
+different from the pebble graph that we
+had below except that it's having four
+instead of two devices. But this graph
+is more interesting in my opinion
+because it's showing you essentially the
+idle time as well as the order of the
+forward and backward calls across the
+four devices. So you can see that it's
+mapped by color to each device. The
+first device passes the batch through
+the forward pass of its layers. The
+second does the same, third, the fourth,
+and then the fourth right away does the
+backward of the loss that it calculated
+at the end of the last forward pass. And
+then passes all of those gradients in
+between each step. So in between these
+steps here we pass activations and then
+in between these steps here we pass
+gradients. This is just standard back
+propagation. And then here we have the
+optimizer step because we need to um
+essentially synchronize this and do them
+all at the same time so we don't have
+any weird weight um differences between
+the model weights. Of course the weights
+are going to be different but any weird
+synchronization errors when we update
+the weights. We want to do the
+optimizing step at the same time. And
+then one other thing that I want to note
+once again is you can see the massive
+gap in between the forward call on the
+first device on its batch and the
+backward call. Right? There are in this
+case six time steps between those two
+devices. But if you increase the number
+of GPUs and you'll increase the distance
+between the forward and the backward. So
+this means that for the entire six time
+steps here and until this backward pass
+is completed that the first device is
+storing those cache activations here.
+And this is once again just to
+illustrate the point of the naive
+solution being naive. And now that we've
+done that we were initially going to go
+ahead and implement the naive model
+parallelism right away. But I realized
+that it's much better if we include an
+extra step. Step five now is going to be
+um calculating main or rather completing
+the main function. So it's going to be
+not too difficult at all but we're just
+going to do this so that we understand
+how the orchestration of the pipeline is
+going to occur and then just give you a
+sneak peek. We have the naive pipeline
+step function that we're going to have
+to implement here and then the other two
+which are going to conclude our course.
+So that's what the next few functions
+that we need to complete are going to
+be. So, let's look at what our to-dos
+are. First of all, as a quick rundown of
+what main.py is, it's very similar to if
+we come back and check manual, it's very
+similar to this for loop here, except we
+just implement it in a separate function
+so that we have a better separation of
+concerns. So, we have the same things
+going on here with the batch size,
+hidden dimension, total layers, and
+steps. It's all the same except now we
+do want to set up the distributed
+environment. So, this is pretty simple.
+We'll just do this right away before we
+explain the rest of the code. And all we
+do is call init distributed just as we
+did with uh comms, not comms, but rather
+ping pong right here. So the exact same
+call and then also the exact same call
+for communication. So communication
+equals pipeline comms of rank and world
+size. In this case, we're calling it
+com. So just a little semantic
+difference, but otherwise it's the same
+function and class at the end of the
+day. So we'll do this. And already step
+one is done. So let's give ourselves a
+paddle back. And then going on there's
+something interesting that's happening
+here. We still have the same manual seat
+set to 42. However, let's read what this
+says. Each rank needs to skip the random
+numbers used by previous ranks. And then
+we have this
+strange range value which is equal to
+rank times the total layers of world
+size which is just the number of layers
+that each model contains within our
+pipeline parallel system multiplied by
+two. And just to give you the answer on
+why there's the two here because that's
+where we can start off as the simplest
+explanation. It's just because for every
+single n.linear linear we need to
+initialize both a weight and a bias for
+the fully connected layer. So what we're
+trying to do here is to say okay in
+order to get the most similar results
+possible to manual and um yeah just
+manual and monolith right where we had
+the same seed. The thing is since those
+functions initialize their parameters
+all in one um list or rather in one go
+the random number generator will be
+different because in this case what
+we're going to do is instead if we come
+back to model in step four we're going
+to initialate it in initiate initialize
+it sorry in four separate processes. So
+every single time we're going to do a
+for loop essentially from 0 to three and
+then of course the last layer we add the
+classification head. Where is the
+classification head? Right here. But any
+case, what I'm trying to say is that the
+random number generator will only reach
+four in the charted instance, whereas it
+will go all the way up to 16 for
+monolith and eight um for the first
+eight in the part one of manual and then
+from 8 to 15 or whatever for the second
+part. And for a random number generator,
+this is actually a differencemaker,
+which is to say, you need to order um
+the the generation of those random
+numbers such that you skip the first
+four. If you're in the second layer, you
+skip the first eight that are generated
+if you're in the third layer. Or if
+you're on the last layer, you skip the
+first 12 um models. So if I'm just going
+to give you an example, this is going to
+be the best way to illustrate it. For
+rank zero, which is the first GPU, we
+say for i in range zero and this means
+that we don't actually consume any
+random number states. So what's
+happening here is that we are just
+generating one random number which will
+as it says here consume a state and
+because the first GPU is the same um
+same way for initializing the values as
+the uh first GPU in our monolith which
+is the only GPU then we can keep it the
+same but as soon as we reach the second
+GPU right which will have rank one it'll
+be for i in range 1 * 16 / 4 so 1 * 4 *
+2 because when we initialize an n linear
+we initialize both the weights and the
+biases. So for the first layer we'll do
+um 1 * 4 * 2 which gives 8 and this
+means that we'll consume eight random
+numbers which would represent the first
+eight um nn linear or the first four nn
+linear weights and biases that we would
+have initialized for the first GPU. So
+all of this ramble is just to say that
+we need to consume RNG states to skip
+the random numbers used by previous
+ranks since we're not actually
+initializing the model all on one GPU.
+We're initializ we're initializing it on
+separate processes which cannot talk
+with each other at all. So that's the
+entire explanation here. And then one
+other thing worth noting is that since
+the same file is duplicated on four
+instances when we want to print for
+logging we need to only print for one of
+the GPUs. So we just default to say if
+rank equals equals zero then we'll print
+start or else you'll print starting
+micro um run four times which is just
+unnecessary and verbose. So this is
+another thing we're noting when you're
+doing a pipeline um distributed run.
+Okay. So the next thing we want to do is
+just initialize initialize the sharded
+model and that's going to be very simple
+because we just call sharted MLP and
+then we put in the dimensions and the
+arguments u which all should be given to
+us right now. So total layers is going
+to be actually this one. We need to be
+careful because it is not just total
+layers. It is rather total layers or
+actually no I think we do the
+computation. Let's just make sure that
+we do the computation. Yeah, we do the
+computation total layers divide world
+size inside of there. So we don't want
+to do it a second time. All right. Um
+why isn't dim working? H it's because
+it's actually called hidden dim here.
+And then what's next? Rank. All right.
+Where is rank? We have that. And then
+world size. So everything is very simple
+in this case. And then now let's go
+down. We initialize the optimizer here.
+And whereas before with manual we had to
+do the list of parameters. So let's find
+that here. List of part one plus list of
+part two. In this case, since our device
+only exists on itself, we're not
+actually doing the stupid manual thing
+where we split two GPUs on the same
+device. We only need to give the atom
+optimizer here the parameters of this
+model, not all models because we're only
+concerned with optimizing on the
+specific device that each um GPU is
+working with or rather on the specific
+model that each device has. Okay. And
+then what's what's going on here? It
+says only rank zero loads of data, which
+is true. And we're just going to call
+this fixed input. So if rank equals
+equals zero, we'll do um torch.rand
+rand n
+and then the parameters are size. So we
+just take the batch size which is 32 and
+then the hidden dim which is 128.
+And let's do that really quickly.
+Okay. And I don't think it requires
+anything else.
+Okay. And then in the other case when
+it's else we still want to set fixed
+input so we don't get any errors. And
+what we're going to do here
+is set the fixed input to be the same as
+the batch size. And now coming down here
+to step five, it says only the last rank
+needs the targets to calculate the loss.
+And this is also true. So in this case
+if the rank equals equals world size
+minus one we want the model to learn to
+classify these random vectors and
+therefore we're going to do torch.rand
+int because we just want to class
+between one and zero and one sorry. So
+zero and then two because it is the
+upper um exclusive on the upper bound.
+And we should put this in a
+um set of brackets that we can also give
+it the number of sorry rather the size
+of the uh the size of the vector that we
+want. And I just realized it says that
+we should not um input them in brackets.
+We should rather just do 02 batch size.
+Okay. And then fix target. Otherwise,
+it's just none. Very nice.
+And one other thing I just realized I
+minced is that since this is of course a
+CUDA compatible course, we need to move
+these onto the device if we are using
+GPUs. So whenever you're moving things
+onto device or thinking about whether or
+not you need to, it's always the models
+and the tensors that need to be moved
+onto a device. if you are using
+something that is not the default which
+is of course CPU's default otherwise you
+need to have that here and if you
+remember the device is returned by this
+init distributed method so that's all
+fine and dandy and in fact right now
+that's everything that we needed to do
+in order to run main.py pi. Now, if I
+come down here to show you how the
+actual runner training loop works, it's
+almost identical to the one we set up in
+manual, but the only difference is line
+50. So, let's actually come and open up
+coms, not coms, but rather manual.py, so
+I can show you guys the difference.
+So if we come here we can observe okay
+there was this retain grad stuff which
+once again we had to do because we were
+manually uh doing pipeline parallelism
+but more importantly I want to I want to
+look at the loss here. So these are the
+two lines that are only one line here
+and furthermore we can see that the
+optimizer step in this case is the same.
+So we don't have any differences with
+the optimizer step and this is because
+um we just optimize at the very end of
+the pipeline and it's the same whether
+or not you're doing any special pipeline
+parallelism or not. It has to be synced
+across all devices anyways. But what the
+difference is is in this case we get our
+loss from part two and then call loss
+backward. But because we have to
+orchestrate all the communications in
+pipeline parallelism manually, then we
+don't call loss. Within this training
+loop, we instead call the pipeline step
+function, which if I just look at the
+dock string, it does a single training
+step using the naiveuler.
+So it's inside of the naiveuler that
+will actually do the backward pass. Um,
+and then here we just return loss as the
+final output of this main.py run.
+However, what I didn't code which is
+better in terms of semantics is the fact
+that the loss is only returned if we're
+on the last device because only the last
+device can compute the loss. So
+otherwise the knife pipeline step
+actually just returns none. Which is
+because if you are a device that is not
+the last one then you actually don't
+return anything within the training
+loop. You just pass your forward um
+activations to the next device or you
+pass your gradients to the previous
+device and then the last device is only
+one that's telling us what the loss is
+in order to measure the training
+progress. So with that being said, we
+need to check if world size minus one
+is equal. So not that but rather if rank
+is equal to world size minus one. If
+rank minus one is equal to world size
+then we will do this one and then else
+it will just be the exact same thing
+except it does not return anything. So
+we won't even capture it. So there's no
+difference between what we had
+previously and what we have now. But it
+is just semantically better because we
+want only to return and capture this
+loss when we're on the last device.
+Otherwise, we just do a training step.
+So we can't actually test this yet
+because we actually haven't implemented
+this yet since this is from step
+sixuler. So now the logic step is to
+come ahead and open up step
+six_chedul.py I and see what we need to
+implement in the naive pipeline step. So
+we already read the dock string here but
+let's look at the todos. First of all we
+need to receive input from the previous
+stage if we're not the first stage. Then
+we want to forward the batch to the
+model. Send output to next stage if not
+the last stage. And then that's all
+forward. And then now look at the
+backward pass. If we're the last stage
+we want to compute loss and call
+backward on it. Then uh if not we're not
+if we're not the last stage. So for any
+if we're any other stage, we're going to
+receive the gradient from the next stage
+and call backward and then send the
+gradient to previous stage if not the
+first stage and then return loss if last
+stage else none. So if we come back to
+main, the reason once again why I have
+loss equals this when we're the last one
+and nothing else otherwise is because
+this will return none anyways. So there
+really is nothing to return. And I
+didn't look actually I didn't explain
+the last part of main.py. So let's
+really quickly do that. If rank is zero
+then we will just print train complete
+the the time it took and the final loss.
+Whereas before we didn't check um and we
+just printed it. Once again since we
+don't want to print this four times for
+every single model um then we have to
+just uh print it once. And now I just
+saw another error here is that if rank
+equals world size is minus one. We can
+only do this because just as a reminder,
+we only have the loss for the last model
+and otherwise the loss does not um have
+any existence for models before it. And
+one last thing as well is that since
+we're just returning a scalar loss, then
+it's not a tensor. So we should actually
+remove this item call here. Okay. And
+then the very last thing is that for
+every single group you want to destroy
+the process group which just ends the
+communication um conference call between
+those different devices. Okay. So let's
+now jump into step step six schedule. So
+if coms.rank is zero then we will
+receive the batch data directly or else
+we'll receive the activations from the
+previous layer. Let's close this since
+we no longer need that. And we can
+actually just uncomment this because it
+already has some of the logic for us. So
+let's just go like this and have the
+first condition here and then else uh
+right there. Okay. So first of all we'll
+say input
+data equals batch. So the batch is just
+that exactly. If we come here um the
+fixed input is just the torch.rand n of
+the batch as hidden mentioned. Okay. So
+that is pretty simple and if not we need
+to use coms to receive the data. So
+coms.receive
+forward is the method and it requires
+shape device and DT type. DT type being
+optional but we do want to include the
+shape. So we have to set the shape which
+I haven't done yet and we'll do that
+just right here.
+Okay. Shape
+is going to be what? shape equals we're
+just going to take the batch here and
+say shape equals batch by hidden dim
+because that is the shape of the
+temperature that sorry the tensor itself
+and you may be confused because in this
+case we have batch already equal to
+batch by hidden dim right because if you
+look at this naming convention here we
+have fixed input is batch size by hidden
+dim but this is a tensor of random
+integers of batch by hidden dim whereas
+here if it's not rank equal equals zero
+then as I mentioned before we will take
+fixed input and just set it to batch
+size because if you remember in ping
+pong right we actually don't know the
+batch size if we're on a different
+another tensor because they're
+completely separate processes but if we
+just send this um as the fixed input
+which is technically incorrect right
+because this is not an input this is
+just telling us what the batch size is
+as long as we know that we're doing this
+weird trick where we're setting the
+batch size as the fixed input when it's
+not the first device then this is fine
+and what it allows us to do is know the
+shape of each device such that we can
+create a tensor of zeros within our
+communication pipelines comm so that we
+can receive that tensor itself. Okay. So
+now that we have the shape and have
+received that forward tensor um we
+should actually call this the input and
+we'll just use the same name input data.
+Now we can do the forward pass through
+the model. So this is pretty standard.
+We just do where's the model? Um it's
+it's just called model and then we will
+just input data. Boom. And what we what
+do we want to call this? We want to call
+this output. So already we have the
+forward pass done and dusted. So pretty
+well. And then now we need to say if
+we're not in the last stage, let's send
+the output to the next stage. So this is
+important as well. Because if we just
+calculate the output for each stage,
+then without sending it, we'll only get
+up to the first GPU because it will
+never send its data. So let's say if
+model dot rank
+is not equal to world size, model.world
+size
+u minus one,
+then we will send the output to the next
+stage. So, we're going to do a coms dot
+send forward. Oh, I spelled comms wrong.
+Send forward.
+And this is going to be on the output.
+And once again, the send does not return
+anything. So, we don't need to capture
+any um return type. It's just none. So
+already this one is also out of the way.
+And there's two things that I just
+forgot. So the first thing is that when
+we send output to the next stage, if
+it's not the last stage, we should
+detach it. So if I just do detach here,
+this will detach this output from the
+computational graph. And what why
+exactly are we doing this? I have this
+explanation right here. So I'm just
+going to go through it together with you
+guys under detach. So let's see what it
+says. When you send a tensor via disend,
+the data travels over a net network
+cable or between CPU processes. and the
+graph which represents the memory
+pointers that link one layer to the next
+cannot travel through the cable because
+they only exist in the local RAM of the
+sending GPU because essentially all of
+this PyTorch computational graph and
+autograd memory is just stored in RAM.
+And so to prevent memory leaks, if you
+do not call detach on the output tensor,
+it will remain hooked to the
+computational graph of the current GPU.
+And PyTorch will try to keep all the
+activations of all previous layers in
+memory because it thinks you might call
+backward on that specific output
+variable later, which leads to a massive
+memory leak.
+And by detaching, you are explicitly
+saying, I am done with this forward pass
+locally. I'm handing off a static copy
+of the data to the next device. And if
+we look at it right here, it says the
+next device now gets a clean tensor and
+restarts the graph using required grat
+equals true. And then for the backward
+pass, which we'll also do, we manually
+reconnect the chain later when we
+receive the gradient and call output
+backward receive grat. So we haven't
+done this yet, but stay tuned. So in
+summary, you don't want the next GPU to
+have ghost references to memory that it
+cannot access. Instead, you give it the
+activations and keep the history locally
+for when the backward pass eventually
+returns. Okay. And one other thing that
+I didn't um get to just yet is the fact
+that in our schedule we must do the
+following. You say input data.requires
+grad equals true as well when we um
+receive this from the previous model.
+And why is this the case? Well, I also
+have the explanation just above. Okay,
+so we're just going to explain it by
+considering the two um situations
+requires got equals true and requires
+got equals false. So just to remind you
+guys what's actually happening here in
+the code, it's saying that once we get
+our shape and the input data, we need to
+set it to requires grad equals true
+because we detach it actually in this
+case. So when you detach a value, the
+requires grad is equal to false by
+default. So we need to set it back to
+true. And let's see through this setup
+why that's the case. When we set recog,
+we allow the chain of math to stay
+connected across the two devices. So if
+we have only two devices, let's say that
+rank zero performs a calculation A * B
+equals C and its weights are B and the
+input is A. Now rank one receives C. We
+manually set C.IUS equals to true. Now
+rank one performs its own calculation
+which is C * D equals output. And then
+when we call backward on rank one,
+pietorch calculates the gradients for
+its weight D and for the and with
+respect to input C because we set
+C.Rires get equals to true. And the
+result is rank one now has a value for
+the gradient of C. And when it calls
+send backward of those gradients to rank
+zero, rank zero receives those gradients
+and can now calculate the gradients for
+its own weights B and can now update it
+in the optimiz optimizer step. But in
+the counterfactual where you have
+requires got equals to false. Then rank
+one treats incoming data as a constant
+rather than a variable because we
+detached it. So it does not track
+gradients anymore. So rank zero send C
+to rank one. Rank one receives C. By
+default requires grad equals to false.
+So rank one calculates its output C * D.
+And then when we call backward on rank
+one, PyTorch calculates the grains for
+its weights D. And you can actually
+optim up update this in the optimizer
+step. But then because C was marked as a
+constant, no grad required. The engine
+stops there and the result is C.GRAD is
+none. So rank one has nothing to send
+back to rank zero in the backward pass.
+And therefore rank zero never receives a
+gradient. So its weights B are never
+updated. Only half the model learns.
+Essentially requires grad equals 2
+creates a hook at the very edge of the
+devices memory. And without that hook,
+the backward pass is nothing to grab
+onto to pull the information back across
+the network to other device. And this is
+incredibly important to note when we're
+doing pipeline parallelism. This is no
+longer done automatically for you by
+autograph. So you need to do it on your
+own. Okay. And now that we have this
+properly set up, the entire forward pass
+is done. And now we just have to do the
+backward pass. So 50% of the naive
+pipeline is already done for us. Let's
+say let's see what's happening here.
+Backward pass different for last and
+non-last. So this is true, right? The
+backward pass for the last stage we need
+to calculate loss. But if it isn't then
+we um just need to propagate it back to
+the last node. So let's first just say
+okay if model rank is equal to uh model
+world size then we'll do something for
+the loss and then otherwise we won't.
+So just put in the skeleton here. Okay.
+So let's see what it says. If last stage
+compute loss and call backward on it.
+Okay. So if we are the last model, let's
+come and check the forward pass already
+calculates the mo the loss for us. If
+self.rank equals equals self.orld size
+minus one. And I just realized as well
+that in our forward pass we forgot to
+pass targets. So we should do that
+before anything else. Um so send
+forward. Where is the forward pass? It's
+right here. It's because the type hints
+are not coming up unfortunately. So we
+can't really see the inputs that we need
+for our forward pass in this case. But
+what's worth noting is that the targets
+will be none when we are using a device
+which is not the last one. Right? Right
+here fixed targets none otherwise it
+will be set up to those random ins. So
+this is all fine. And then right here we
+just all we have to do is say loss
+equals output so that we change the name
+of it because the output will be the
+activations for every single device
+except for the last one where it's
+actually the loss and then we just
+trigger the backward pass by saying loss
+backward. Okay. So now that this is done
+this will give us the gradients for the
+loss with respect to the weights and the
+gradients for the loss with respect to
+the input data because we set input
+data.requires grad equal to true. And
+then now in the else it says receives
+grad from next stage and call backward.
+Okay. So let's do coms dot
+receive backward and it takes shape
+device and type again. And in this case
+we know output has its own shape and the
+gradients are always the same shape as
+output. So we'll just do output.shape
+and then device which hasn't changed.
+And we need to receive this. So we can
+call this
+gradients equals this. And then we need
+to call backward on those gradients. So
+we have backward here. And how backward
+works when you don't have a scalar loss
+is that if we just check our schedule.py
+where we have the explanation here,
+right? when you call that backward on a
+non-scaler tensor like a hidden
+activation with shape 32128 which is
+exactly the case here pietorch requires
+a matching gradient tensor of the same
+shape and the reason why this is is
+because the provided gradient acts as a
+starting point for the vector jacobian
+product allowing the chain rule to flow
+backward to the weights and inputs I
+honestly don't know what a vector
+jacobian product is to be precise but
+this is just the rule that we need to
+follow so just to go give you guys The
+spoiler here it's output.backward of
+grade gradients from the next. So we
+just do output dotbackward
+of the gradient.
+And that's all for this stage. But then
+one thing worth noting is we need to
+send the gradient to the previous stage
+if we're not the first stage. This is
+very important. So if model.rank
+rank is not equal to zero
+then we'll do the following. So we
+already did the backward pass which is
+different for the last and the non-last
+which are these two. So the send the
+gradients to the previous stage if not
+first is just a
+coms dot send backward and in this case
+we just send a tensor which is going to
+be the input
+data dot grad. And why is this the case?
+It's because as soon as we calculate the
+output backward of the gradients, it
+will populate the grad value of both the
+weights of the model as well as the grad
+value of the input data since we
+calculate those two gradients for every
+single layer in neural network. So I
+want to send backward those specific
+gradients to the model. And this will
+make sure that the backward pass flows
+through all the way. Okay. And now that
+this is done, send grad to previous
+stage if not the first stage that we
+want to return loss if we're the last
+stage else return nothing. So if the
+modelrank
+is the same as the model world size
+minus one if we're the last GPU then we
+will return
+the loss. Okay, we're going to return
+the loss which is a PyTorch tensor. And
+I just realized to make things
+consistent with the other code that
+we've written so far, we'll just instead
+of returning loss item here and then
+having a scalar loss back in our main
+loop, we'll return the actual loss
+tensor and then access loss by saying
+loss item because if we come back just
+to make sure in manual right we're we're
+calling loss item because this is how
+you actually get the value of a tensor
+by calling the item field. So we'll just
+keep it consistent like that. And that
+if I'm not mistaken is all of the
+necessary logic for implementing the
+class. And now we can actually try to
+run this. But before we run it, we need
+to just change the from imports, right?
+because these are actually importing
+from the finished um src but instead we
+want it to import from these two. So
+let's just change that in this line
+here.
+And yeah, we don't even use init
+distributed in this case. So no need for
+that. Okay. And yeah, we're probably
+going to get a bug here. So let's be
+prepared to debug. But we're just going
+to do UV run torch run with four GPUs
+since that's a standard that we've taken
+for um this setup here. And that's all
+of the examples as well using four GPUs.
+Processes per node is four. And then the
+actual script is in my work and it's the
+main function. So let's see. Oh, we
+spelled it wrong. Boom. Let's see what
+error we get to start off. Okay, it's a
+uninitialized tensor. It seems int is
+not a module subclass. So, okay, shared
+MLP2
+device. So, this is in uh line 30.
+Are we using the proper
+um dim total layers rank and road size?
+So, that's fine. But ah I see there's a
+very big error here which is the fact
+that we're not adding a n sequential of
+dim dim input dim and output dim 2 but
+we're adding n linear. I don't even know
+what that would do. Uh clearly gives you
+an error. So that's now resolved. Let's
+see what we get now. Okay. I saw
+something else. Let's see what it says.
+Okay. So we got an error on the fixed
+target in line 42 of the main. I think
+this means that batch size actually is a
+tpple. So let's just check here using
+their examples. Um yeah okay so batch
+size needs to be a tuple. So 3a 5 and
+then batch size is a tpple. So there we
+can fix this very easily. Luckily these
+these bugs so far are not difficult to
+resolve. Okay. Did we have the exact
+same error somewhere else? Let's see in
+rand n.
+No, that one you can just implement it
+as a set of parameters without any
+changes. Okay, I think it's because we
+need to add the comma here. So it
+actually becomes a tpple.
+Okay, that's a new error. So the name
+loss is not defined. That is fine.
+And it looks like this is because we're
+not doing the proper check. So if rank
+equals equals world size minus one and
+okay this this means that we're the last
+model. Are these two checks the same?
+Indeed they are. Okay. So why is loss
+not defined? Okay. And this is yet
+another pretty embarrassing bug. So this
+is the correct way to say if rank equals
+equals world size one. But here if I
+have rank minus one equals equals world
+size which is saying if 3 minus one
+equals 4 which is not the case. So let's
+see now will it work or will it still Oh
+wow. Okay. I thought we would get more
+bugs but look at this guys. We actually
+have a parallel pipeline naive setup
+going on which is getting a loss of
+0.214853.
+This should hopefully be deterministic.
+Okay, it is deterministic. And now if we
+look at the loss that we get in our
+other script which we can just use
+manual to to check. Let's do UV run
+and go into my work and step
+one.mmanual.
+In this case, we're splitting the model
+up manually. And you can see that we got
+a loss of 0.231414.
+And here you get a loss of 0.214853.
+So the losses are once again not
+identical because
+we have this random number generator
+which is trying to make the losses the
+same but there's definitely some um two
+some things that we're missing
+essentially since we initialized these
+random numbers here then that's not
+happening in the other end and it's not
+in the same order. So we can hope to get
+similar losses which is the case here
+but it's not going to be the the same
+loss ever. And yeah, this is really
+awesome, guys, because what we've just
+done now is a single training step using
+the naive stop and wait schedule. And
+it's pretty simple because we've already
+implemented all of the primitives
+through send backward, receive backward,
+send forward, receive forward. We just
+need to implement them and make sure
+that we're using these on the same and
+correct device. And one thing that I
+want to show you guys before we move on
+because if we look at our syllabus which
+is just in the outline then the next
+thing right is to implement gpipe. So
+just as a teaser we'll be changing from
+batches to chunks in this case but right
+now what I want to show you is a
+profiler of this function. So what I
+have in the src is profiler.pay and
+profile schedule.py.
+So, we're never going to implement the
+profiler on our own because if you look
+at the profiler, it's pretty boring and
+just a bunch of context managers. And
+then the profile version of the knife
+pipeline stage is the exact same thing
+except it has all these with context
+managers to profile each part of the
+function. And the entire intent here is
+to see okay because of the fact that the
+pipeline is very inefficient with all of
+these bubbles, how much time are we
+actually spending in each device?
+Because right by default, if everything
+was working perfectly, you'd spend 25%
+of your time on each device because this
+one um there's four devices and you just
+divide um the number of devices by one.
+So 1 divided 4, sorry, divide one by the
+number of devices. And if we profile
+this, we should get a number close to
+that. And what I have right here is
+profile main.py, which is the same
+structure as all of our main runners,
+except it imports from profile schedule
+as well as takes the profiler from sorry
+takes the pipeline profiler from
+profiler. So all of this is kind of
+confusing with these imports, but the
+only thing that matters is to show you
+guys the output of this run. And it's
+very interesting because if we come to
+profiled main, what are the actual
+differences? Well, we print the summary
+profile print summary which if you come
+and look at the profiler just has all
+right where is the profiler just has
+many different print statements for the
+summary statistics summary statistics
+sorry. And then what else do we do? We
+simply pass the profiler to the pipeline
+setup in the profileuler to allow for it
+to profile and we also initialize the
+profiler up here with the rank of the
+model because we need to know the
+model's rank in order to profile each
+device properly or each process in our
+CPU core. So that's everything for the
+logic of how this is actually going
+down. And then if we look at the
+profiling, so the first thing you'll
+notice is that we get the same final
+loss, which is great, meaning that this
+pipeline setup is the same as the one
+that we implemented. And then after you
+can see that the pipeline profilers are
+ranked from rank three all the way to 2
+1 0. And coming up here, we can check
+why that is. It's because the last
+device always finishes first and then
+it's the second, third, or rather device
+two, device one, device zero. Okay. And
+then what else is there to worth noting?
+We can check and see that for some
+reason the last device is doing the
+majority of the compute even though oh
+this actually makes sense actually
+because the last device has the LLM not
+the LLM but rather the classification
+head right if we come into model.py
+high. Remember that if the rank is the
+last one, not only does it have to calc
+the loss, but also has to calculate the
+head. So this makes sense why it's
+taking more time on average. And then
+the communication time represents how
+much time they're waiting for the other
+GPUs to send them their data. So this is
+also the majority of the time for each
+GPU because once again, on average, each
+of the four devices should be spending
+three4s of their time waiting. So I'd
+encourage you to run this command right
+here torch run of profile main and check
+it out. You can also look at some other
+stats in terms of backward and forward.
+So it's just a rice really nice utility
+and we're going to be using that for
+every single further pipeline parallel
+in order to see how much more efficient
+they are versus the naive approach. So
+on that note, we're now completely done
+with the naiveuler. So let's look at
+what's next. And what's next is Gpipe.
+Okay, so diving right into Gpipe. What
+is it? It splits the large mini batches
+into smaller micro batches and processes
+them through model partitions, which are
+the different GPUs. And how does it
+work? Well, we simply split the mini
+batch. So each mini batch of size B is
+split into M micro batches. So the size
+of each micro batch being B divided by
+M. If we have 32 as our batch size and
+we have four batch micro batches then
+the microbatch size will be eight and
+then we just pipeline execute them uh
+just as we've done with our naive
+implementation. So you can really see
+that as opposed to our naive
+implementation it's not that different.
+We are simply making more batches. And
+what you'll notice is that this bubble
+which will make more formal through an
+equation that will give us the amount of
+space that is actually white or idle. Um
+this bubble is actually made smaller the
+more that we increase the micro batch
+size. So there you have it for the
+little introduction. And one thing that
+we would write that we should right away
+note is that we have to do gradient
+accumulation here across the set of in
+this case four microbatches. So um just
+to give you the explanation here each
+microbatch is trained in its gradients
+are computed independently and then
+gradients from all microbatches are
+accumulated locally before the optimizer
+update giving the same effect as if
+you're training on full batch one. So
+this is just classic gradient
+accumulation
+and let's talk about some of the
+details. So as I mentioned once again we
+have the bubbles and there's this
+formula which I will motivate. So first
+of all there is a fill and a drain phase
+of the pipeline when not all devices are
+occupied and these create the bubble. So
+um at this point right there's actually
+a single point here for example where
+all devices are being used and a single
+point here where all devices are being
+used. If you just take the vertical line
+test of this batch um and this is if we
+have batch size four sorry we have yeah
+batch size four and four GPUs in this
+case we have batch size one and four
+GPUs that's what we've done in our naive
+solution so you can say that the naive
+case is a special case of micro um
+batching which is called gpipe where the
+micro batch size is just one it's the
+same as the batch size and now let's
+finally look at how we arrive at this
+formula which the fraction of time lost
+to bubbles aka 1 - m over m + n minus
+one. Okay, first of all, looking at the
+numerator, we have 2 nm m with I haven't
+mentioned this, but n being the number
+of GPUs, so the number of devices and m
+being the number of micro batches. And
+how do we arrive at this number? Let's
+use this example to illustrate that.
+First of all, the two I'll just mention
+right now comes from the fact that we
+have a forward and a backward pass which
+are mirrors of themsel, right? If you
+put your hand right down this line,
+you'll see that you're just doing double
+the work. Of course, the backward pass
+is more computationally heavy, but we're
+going to abstract that for now and just
+assume that we're just doing the same
+thing twice. So that's where the two
+comes from. And then we have n devices.
+Okay, this is the vertical column here.
+And the m number of microbatches is just
+one here and the number of microbatches
+is four here. So in this case, the 2nm
+is like the theoretical best case
+scenario of the work that all of these
+GPUs would accomplish. So if somehow for
+example you could synchronize all four
+of these happen at the same time, then
+you'd have F1 here, F1 here, F1 here,
+and F1 here, which is equal to four. And
+if we calculate this as well, we get
+eight because we multiply by two. So in
+essence, we do four units of work for
+the forward pass and four units of work
+for the backward pass. Once again, two
+times four GPUs and each GPU does one
+unit of work. And this is the ideal case
+where if there was no idle time, then
+the GPUs would do eight units of work
+with zero idle time. And in the bottom,
+this represents the idle time. So this
+is how we get the the fraction. So
+looking once again, I'll already tell
+you that the two in this denominator
+represents the amount sorry the the
+forward and the backward. So we can just
+ignore that for now. And then if we look
+inside what's going on here,
+it's easiest to think of this um when we
+look at the last GPU. So GPU 4 n minus
+one here means how much time does it
+have to wait before it can actually
+start. So in this case we have n being
+four minus one. So three. So GPU 4 has
+to wait one two three time steps before
+it has to start. And then it has to do m
+units of work which is just one. So in
+total it has to wait three time steps
+and then do one unit of work which is
+the same as 1 + 4 minus 1 and the answer
+to this is 4. So we have three units of
+idle time and then one unit of work.
+Okay. So this explains what's going on
+here. And then how can we interpret this
+for GP1 for example? Well in GP1 it's
+the opposite. In GP1 we do our work at
+the very beginning but then we have to
+wait n minus one time steps which is the
+same as three. So we wait 1 2 three time
+steps and then we actually multiply this
+by two. So we wait another 1 2 3 time
+steps and then we add back the one which
+is m here to do our backward pass.
+So that's 2 * m + n minus one. And then
+where does n come from? It comes to the
+fact that we have to do this over all
+four GPUs. So for the GPU 1, there are m
++ n minus1 opportunities to do work in
+this slot, even though we only do it m
+times because the other n minus one
+times were waiting. Whereas in the
+numerator, this represents what would
+happen if we didn't have to wait. So to
+recap here, there's a forward and a
+backward pass, which gives us two. In
+the numerator, there are n devices and
+there are m units of work. That's the
+ideal. And then in the real situation
+here we have once again the forward the
+backward two here across n devices
+and then we have to do one unit of work
+here but then we have to wait n minus
+one time steps n minus one which is
+three. Okay. And then you can just
+divide the 2n out of the numerator and
+the denominator and then this gives you
+this expression. And then why are we
+doing one minus this amount? It's
+because we are actually we are actually
+computing the time of uh the the amount
+of time spent idling not the amount of
+time spent working right this this
+fraction here because the the numerator
+gives us the ideal amount of time that
+we spend right which is eight in this
+case it's actually out eight if you
+count 1 2 3 4 5 6 7 8 this is the this
+is the amount of work that we have to do
+which you could ideally do just in two
+vertical time steps but we can't do that
+because these are sequentially dependent
+in any case that's what the numerator is
+and we want the opposite of that and
+then this is why we scrapped one minus
+one. If we wanted to know the fraction
+of time spent computing then we would
+just um keep this in the calculated in
+as a as a calculation. So just as a uh
+quick exercise let's calculate these
+numbers and the the first thing that
+you'll note is that this is actually
+incorrect the bubble fraction if you
+have tried this for yourself up to now
+then you will notice that it is
+incorrect. So let's do one minus m /
+oh not m but rather one I mean we could
+really do this in our head but uh let's
+just use the Python interpreter because
+we're lazy. So this once again gives us
+0.75 and this is incorrect. So this
+would be the case if we had five GPUs
+and each GPU was only doing computations
+20% of the time. So this is just an
+error in the diagram. And once again
+this makes sense 0.75, right? Because if
+we consider each row of here as four
+possibilities to do something, it's only
+doing something in one of the four
+possibilities. And therefore um 1/4 of
+the time is spent computing and 3/4 of
+the time is spent not computing. But
+then now in this case we can recalculate
+it and see what we get. So the m in this
+time is four. Um so let's just change
+everything to four. That was m and um we
+still have four GPUs. So, okay, there's
+an error in my calculation. We got 3.4.
+I think it's because we didn't do one
+minus. There you go. So, as you can see
+here, 42% of the time is spent idling.
+So, overall, the average time is spent
+doing something, but still it's not the
+most efficient. So, in conclusion, if we
+look here, since we have m in the
+numerator and in the denominator, but um
+the numerator also has other terms. The
+greater that we make m, the closer that
+this uh this term will become to one and
+then therefore we'll have a smaller
+portion of our graph using bubbles. But
+conversely, the more devices you add,
+the more time each device spends doing
+nothing. And this makes sense. If you
+have 10 GPUs, then in the case where you
+have one micro batch, then the GPUs are
+only on 10% of the time, each each
+individual one. So to conclude, each
+microbatch requires storing its
+activations until the backward patch is
+finished.
+And now with respect to memory demand,
+each microbatch needs to store its
+activations until the backward pass is
+finished. So even increasing
+microbatches is good for parallelism,
+but it does make the memory more
+consumptive. And you can think of this
+through the following example, right? If
+we have F1 here and we're doing the
+backward of F1 at this time step,
+whereas before we would just free up the
+activations in one go for the first
+batch or the only batch in this case of
+the first GPU, in this case we have to
+do this four times. And this simply just
+takes more memory and also introduces
+more communication overhead because in
+Gpipe we need to cache the activations
+for each microbatch from the time it was
+forwarded until the corresponding
+backward pass. One thing that is worth
+noting is that gradient checkpointing
+can be used to trade computation for
+reduced activation memory. So instead of
+storing all intermediate activations,
+some are recomputed on the fly. And here
+you can see that we only would store the
+activations for the whole batch at the
+boundary. This is the gradient
+checkpoint. and then you recomp compute
+the non-cash activations for the current
+microbatch during that backward pass. So
+that's also an option. Another thing
+worth noting is that if you use batch
+norm since now you're splitting up your
+batch, it would break the microbatch
+independence assumption. So, um, yeah,
+we're not actually going to be computing
+micro uh, sorry, we're not actually
+doing any batch norm computations in
+this series, but this is something worth
+noting is that as soon as you split the
+batches, then you can no longer compute
+the statistics of them in one shot. So,
+you would have to do it on the
+microbatch level instead of the batch
+level. And one other thing is that even
+though classic GPIPE does not add
+overlapping communication and
+computation, there is still a
+possibility here and this is once again
+shown in the Simon Bow article where in
+essence you compute half of the
+microbatch
+and then you send that half while you're
+doing the computation of the second
+half. And in this case, you overlap the
+computation of the second half of the
+microbatch with sending the first half
+of the microbatch. So once the second
+half is done computing, the first half
+of the microbatch has already been sent.
+So now GPU 2 can already start computing
+the activations of the first half of the
+microbatch and so on. So you can see the
+dependency graph is as such. This is one
+way that you could introduce a
+computation computation computation
+communication overlap, but it is worth
+noting that this would increase
+complexity quite a lot and with the way
+that the kernels are set up, it may not
+even work. So there you have the
+introduction to Gpipe and now we're
+going to implement it. So coming into
+the schedule, we have the to-do list
+here which we're going to go through one
+by one. But first of all, since the
+G-pipe algorithm is essentially just uh
+the naive algorithm but across batches,
+we can just reuse this as our skeleton
+here so that we save time. So I'm going
+to just copy paste this here and then
+we're essentially going to make this a
+for loop. So the first thing that it
+says is to chunk the batches into
+microbatches and the targets into
+microtargets. This is a very important
+first step. Oh, I think we just ran
+something internal by accident. Anyways,
+so what we're going to do is say that if
+we have model
+rank
+equal equal to zero, then we'll set up
+our micro batches. So we'll say micro
+uh batches is equal to the batch and the
+chunks. Okay. So in essence we going to
+we're going to call torch. There's a
+there's a method called torch.chunk.
+And I think we sorry guys I think we
+have torch as a dependency here in the
+top. Yes. Imported. And what does
+torch.chunk do? Let's read it or let's
+just look at the example rather. The
+examples are pretty bad, but it just
+takes a input and the number of chunks
+that you want to make it into and then
+it returns that as the um the chunked
+input. So the batch is the input which
+is of size 32x 128 if you remember. And
+then the chunks is here which we're
+going to set up to four. So then it
+would become 4x 8x 128 instead of 32x
+128. And then we also do the same thing
+if we're the last one. So if model.rank
+equals equals model.world world
+size minus one.
+Then we'll say the microcore
+oh why am I not just copy pasting this
+and then doing that micro targets is
+equal to the torch.chunk of instead of
+the batch the targets but the chunks is
+the same it's four. Okay so we've done
+the first thing chunk the batches into
+micro batches and the targets into
+microtargets
+and then we need to initialize buffers
+for the inputs and activations. So,
+we'll just do that. Input
+buffer
+equals this. And we'll we'll see why we
+want to do this very soon. Output uh
+buffer
+equals this. I'll just show you very
+quickly. This is essentially the manual
+uh activation storing that we're going
+to be doing. Why are we doing this? It's
+because since we have four micro batches
+for a single run through the network um
+if we're not storing okay this was the
+input activations for this microbatch
+this was input activations for the
+second one then yeah you're kind of
+screwed because you need to either store
+these in a list if you have them in a in
+a local variable then you'll just
+override them. So whereas before we
+would just say oh where are we? Whereas
+before we would say input data equals
+this. Now we're going to have to add
+this to a list so that we have four um
+values one for each micro batch. All
+right. So now that that's done, we've
+initialized the buffers for the inputs
+and activations. We're just going to
+call the output the activations in this
+case. Now we're going to do a for loop.
+And this is where we're going to wrap a
+lot of this stuff. So let's just see
+where was the where's the backward path
+starting. So we can split this into two
+halves. All right. So this is the
+forward path. Sorry, this is the forward
+pass here. This is the backward pass
+here. And each one is going to be
+wrapped in a for loop. So, we're going
+to say for i in range chunks because we
+need to do this over the four chunks.
+And let's just tab this right here.
+What's it saying? It's saying for the
+microbatch, if the coms.rank is equal
+equal to zero, use the microbatch
+directly else receive input. So we're
+already pretty much doing this except
+now we should add the data to the input
+buffer. So let's just go through this to
+be sure. If the rank is equal to this
+then first of all we're going to say um
+the data is equal to microcore
+batches of i, right? Because we want the
+i microbatch to pass through our
+network. For example, if we're on
+iteration or i equals 3, then we'll send
+the third microbatch to the forward pass
+of the network. And then here we're
+looking at any device which is not of
+rank zero. So the first thing is just to
+get the shape of that device. Shape
+equals batch hidden uh comma hidden dim
+just as we've done in our uh
+implementation of here of course since
+we copy pasted it. And then now input
+data equals coms. Forward of the shape
+and the device. This is still fine. And
+then input data.requires get equals
+true. Okay. And then it's at this point
+that we want to add it to the input
+buffer. So we'll say
+input_buffer.append
+of input data. But in fact, we want to
+also add the input data for the first
+microbatch. Sorry, for the first GPU. So
+we'll have to take this out of the loop.
+And I just realized that the to-do says
+append input output to buffers at the
+end. So it doesn't really matter when we
+do it as long as we do it before the
+backward pass starts. So we'll do that
+here. And then I'm just going to jump
+the gun and do that also for the output
+even though we haven't set the output
+yet. Okay. So the output data or it's
+actually just called output guys. So
+output is set up here. Let's see going
+through. Right. We've done this. We've
+done yeah this as well as this.
+Now it's saying if not last stage send
+the output to the next stage. We've also
+done that. Output equals model input
+data, targets. One thing that I would
+like to quickly change here though is
+the targets because now the targets are
+only set as microtargets if we are on
+the last device whereas before it was
+set to none otherwise. So the targets
+were set to none. here. Since we're
+batching the targets, I don't want to
+make a batch of none um targets for
+every single device. Instead, we're just
+going to make the input based on whether
+we're on the last device or not. So,
+what I mean by that is if model.rank
+equals equals I should I should have
+this in my clipboard so I don't have to
+write it every time. But anyways,
+model.world size
+minus one,
+right? We're going to do this and we're
+going to take the microtargets
+instead of the actual targets themselves
+of I and then otherwise right we're just
+going to do the model
+on the input data only because if we
+come to model.py it expects the targets
+to be none by default anyways. It's
+coming back here. This is valid for both
+instances. And
+right, let's see if not last stage and
+output to the next stage. Are we doing
+that? Yes. com comms. Forward output.det
+detach. Exactly. And then append the
+input and the output to the buffers. So
+it looks like everything's done for the
+forward pass. Very nice. Now if we come
+to the backward pass, it's going to be
+somewhat similar. So we'll first iterate
+over all the chunks here and indent
+first. But now we're going to have to
+start to call items from the input and
+the output buffer.
+So what does it say? It says get inputs
+and outputs for this chunk from buffers.
+Very well. So we'll say in this case the
+input
+equals input.buffer buffer input_buffer
+of I
+and we'll do the same for output and
+let's see actually what we're going to
+call this first. So yeah, we get the
+output here. So we'll just call it that
+and then how do we call input in this
+case? We call it input data. That's
+right. So if we come here say input data
+equals this and then output equals that.
+All right. So this should this should be
+good now. And otherwise, what else are
+we doing? So, we get the inputs from the
+chunk from the buffers. If for the last
+stage, we compute the loss and call
+backward. What are we doing here? I
+think we still need to index a few
+items. So, let's just make sure we're
+doing that. If model that rank is the
+last one, loss equals output and then
+loss. Ah, I just forgot. Now, the thing
+is we're doing gradient accumulation. So
+our loss is actually going to be a um
+sum of the four losses for each micro
+batch and then we divide by the chunk
+size at the end. So we're just going to
+initialize our loss as a torch.tensor
+of size output
+dot
+um shape. Do we have an output tensor
+here to refer to? this because the um
+the loss or the activations are the same
+size as the output except for the scalar
+loss. In any case, we're going to add
+the loss to this every single time. So
+loss equals output loss.backward and
+then we'll do loss plus equals loss. And
+I realize now that we should call this
+total loss or else we will get mixed up
+with the two different the two values.
+one is the entire count and the other is
+just the loss. Okay. And then afterwards
+we're going to check if the model rank
+is the last one then we'll return the
+loss and return the total loss to be
+precise. And we want to take that out of
+the for loop because if we don't then
+what will happen is that as soon as we
+calculate the loss of one of these
+values here it will um right as soon as
+we calculate this loss here which is
+equivalent to this one here then it will
+terminate but we want to calculate all
+four losses for all four batches. So
+that's why it's going to become out of
+the for loop. We could also say if
+modelrank equals world size minus one
+and the i is equal to three. But um
+let's just do this to be more rigorous
+to take it out of the for loop entirely.
+So right now we have everything working
+except the fact that the loss should be
+initialized to zero. So torch.z is our
+initial loss and in theory this should
+work as our g-pipe implementation. So in
+resumeé we just took the naive
+implementation and then wrapped it
+around with microbatches and let's see
+did we do everything right return loss
+of last stage else none that's that's
+true because if we don't return the
+total loss here then for every other
+device from 0 to two it'll just return
+none okay but the unfortunate thing is
+that we can't just come in this code and
+do UV run torch run d- n process it
+takes a to write these things. Hey, per
+node of four and run the step five.
+Well, one thing I just realized is okay,
+let's first of all get the correct
+directory and then run step five. So,
+this should work because it's still
+wired up to use the naive solution, but
+I realize yeah, we haven't even imported
+the other one. So, what we want is
+gpipe.
+Okay. And then we're just going to also
+add a parameter here called um not batch
+but rather chunks or just let's call it
+chunk. Who cares? Uh no it should be
+plural because it's going to be four
+chunks.
+And then coming down here we want to
+change this to begpipe
+right and then we see that the chunks is
+the second to last argument for whatever
+reason. So we're going to add that here
+as chunks.
+Okay. And another thing worth noting is
+that we should always be dividing the
+loss by the number of chunks or else
+we'll get four times the loss since
+we're using grading doing gradient
+accumulation. And
+there's probably another few things that
+we have to do here. However,
+I think it's better if we just run this
+to get an error and then see what we
+need to change. If this works, then
+that'll be even better. But I yeah, I'm
+somewhat suspicious that it won't work
+the first time. So
+currently there seems to be an infinite
+loop occurring in our code. So the first
+thing I'm just going to do is make sure
+that we have everything that we need
+here to run the uh the chunks properly.
+I think that yeah there's nothing
+happening on the side of main.py. There
+must be something wrong in ouruler. So
+let's just terminate this and see if we
+get any errors that we can analyze.
+Okay. So I just compared the code to the
+ground truth because I couldn't find the
+bug. And the problem that we have
+currently is with the size that we're
+setting here which is batch size of 32
+even though the shape of the tense that
+we're receiving is actually only of
+batch divided by chunks.
+So this is what we receive for every
+single micro batch because it's 32
+divided by 4 which would be eight in
+this case. So, this is strange though
+because I thought that such an error
+would give you a um a runtime error, but
+it was just running forever. So, I'm
+going to try one more time and maybe
+this will Okay, nice. This gives us
+another error that wasn't the same. So,
+what it's saying here Oh, okay. Received
+an invalid combination. So, I think for
+the torch.zer's function, we actually
+what is the error with this? Right. So,
+it actually is a problem in the
+receive/forward.
+If we look in the error, it's where is
+it exactly happening? It's saying the
+coms that receive forward has got an
+error and it's because we're giving it a
+float, I believe, of DT type of 32. So,
+this is just because I did not do
+integers division here. So, that's
+another big mistake. And I just made
+another mistake, but let's hope it works
+now.
+All right. So, that's really awesome.
+Looks like we have the micro batch
+working properly. And if we just want to
+make sure that we get the same value as
+the ground truth, we can check 0.1779
+and 8. And if we come into SRC and run
+this instead, which I've now changed to
+run with the same uh algorithm gpipe
+instead of the knife solution, we get
+the same thing. So this is really nice.
+And instead of profiling this now to see
+how the bubbles have changed because
+this in theory should give us that same
+42% since we did four micro batches.
+Then we're not going to do this now.
+We're going to do this after we do the
+last algorithm so we can compare them at
+the very end. But let's just try one
+thing really quickly and change the
+number of chunks to eight which would
+make the um device utilization much
+higher but also increase the memory use.
+And yeah, we can't really measure the
+memory use here. So we need to use the
+profiler to see what's actually
+happening. But at least it's not
+changing the final loss when we improve
+when we increase the number of chunks.
+That's a good sign. Something you also
+might have thought as we're implementing
+G-pipe is shouldn't we go back through
+the chunks in reverse order in the
+backward pass since the backward pass
+goes from the last to the first GPU. And
+when I talked with Gemini about this, it
+told me that no, you should do the first
+in first out order. But then when I
+tested it, it was actually giving the
+same results anyway. So if I do for
+reversed range of chunks, let's see what
+we get. We end up getting 0.177998.
+And just as a reminder, this is the
+exact same value that we got when we
+iterated from 0 to 3 instead of from 3
+to 0. So if anybody knows how we're
+still getting the same output whether or
+not we iterate through our chunks in
+reverse or forward order, then please
+enlighten us. But it's just an
+interesting observation that I want to
+make. So it doesn't really matter in
+which way you iterate through your
+batches when you're using GPU. And now
+if we come back to our course outline,
+we only have one thing left. This last
+uh point is left as an exercise. So 1
+F1B is the last topic that we're going
+to cover. And it's called pipe dream.
+One forward, one backward. And what does
+it do? It accelerates pipeline
+parallelism by starting the backward
+pass for microbatch as soon as its
+forward pass completes the final stage
+enabling earlier disposal of cached
+earlier disposal sorry of cacheed
+activations. So what it means is that as
+soon as you finish the entire forward
+pass of the first micro batch then you
+start the backward pass as soon as
+possible and this allows you to free up
+the activations sooner than with G-pipe.
+And this 1F1B algorithm can be composed
+of three parts. the warm up where you
+load in all of the microbatches. This is
+what you call the steady state in the
+middle here. And then the flush where
+you get rid of all of the or you finish
+all the backward passes rather. So in
+the steady state, each device alternates
+between forward and backward passes. You
+can see this here would go backward,
+forward, backward, forward. And with
+four GPUs and eight microbatches, which
+is the case here, at most four
+microbatches are in flight at any time,
+having the same peak activation memory
+as G-pipe. And what we mean when we say
+a microbatch is in flight is if we've
+performed more than one forward pass for
+it, but haven't completed all the
+backward passes yet. And one way to
+calculate the peak activation memory is
+just the number of macro batches in
+flight at one time multiplied by the
+size of those microbatches and the
+number of layers per GPU. So in this
+case it would be 16 divided 4 here and
+then the microbatch size would be 8 and
+the number of microbatches in flight
+would be 4. So it's 4 * 8 * 4. So that
+would give us 64 * 8 or 512 as the
+memory unit. So it would depend on our
+hidden layers how much memory this
+actually takes in reality. But all we
+need to know is that at a given time,
+right, when all of the devices are being
+used at once, the max number of
+microbatches that are in flight is four
+because we only have four GPUs. So
+that's the same peak activation memory
+as GPIP, which is really desirable. One
+thing worth noting is that despite the
+memory advantage achieved by being able
+to free up the activations much sooner
+with this algorithm that has the steady
+state, if you look, for example, by the
+time we've done the entire forward
+backward pass for the first microbatch,
+the fifth microbatch hasn't even started
+yet. So we're much faster in terms of
+freeing up these activations. The amount
+of idle time due to dependencies is the
+same for G-pipe and pipe dream because
+of the sequential dependency structure
+of the fact that you must do a forward
+on a previous layer before you can do it
+on a succeeding layer. And one thing is
+that if you look at the above diagram
+and you shift the blue forward passes
+left and the green backward passes
+right, you get G-pipe. And this explains
+why the bubble fraction is the same. So
+the amount of idle time is the same
+because of this uh sequential dependency
+but instead the activation memories are
+much lighter as opposed to G-pipe. So
+just to emphasize this shift all you do
+is you take 5 6 7 and 8 and you move
+them to the left and you move them down
+and then you would get a set of eight
+micro batches that go so they go down in
+this direction. And then if you take the
+green backward calls, you can already
+see that they're going in that
+direction. So if you just move the blue
+to the left and the uh the green to the
+right, then you have the G-pipe
+algorithm for eight micro batches and
+there's no difference in terms of idle
+time in this case. And another last
+thing worth noting is just for
+communication.
+Both the G-pipe and pipe dream 1 F1B
+algorithm require each GPU to send and
+receive
+N times batch size data per forward and
+per backward. So that means two times
+batch size* N where n is the hidden size
+of the model. So in the forward pass you
+have to send a tensor of size 32x 128
+for all the GPUs and in the backward
+pass you do the same thing. You send
+this tensor of 32x 128 backwards through
+all the GPUs and then we of course
+multiply this by two because we do it
+once for forward once for backward and
+multiply it by the number of GPUs
+because we need to send it for every
+single GPU. But then we're doing minus
+one here. Why are we doing minus one
+GPU? The minus one terms comes from the
+fact that the initial GPU and the last
+GPU both miss one operation. So the
+initial GPU does not receive anything
+and the last GPU does not send anything.
+So we can kind of think that we remove
+one GPU from the picture or we remove
+half a GPU operation, right? Because the
+GPU one here is not receiving any from a
+forward pass and the last GPU here uh
+GPU 4 is not going to send anything. So
+there's the overview of 1 F1B pipe
+dream. And now we're going to be doing
+something some might find funny, but in
+order to gain further intuition on 1
+F1B, we're going to derive it for
+ourselves in this Google sheet. So as
+you can see, we have this split up in
+the grids which perfectly resemble the
+GPUs and each tile is one operation.
+What I'd like to say first of all is if
+you've already understood from the
+initial explanation on how one forward,
+one backward works, then feel free to
+skip ahead. But if not, then I think
+this this will be very this will be very
+helpful to gain intuition on how this
+algorithm works fundamentally. So we're
+just going to be literally numbering the
+micro batches like this and the grid one
+here will be GPU 0, two will be one,
+three will be two, and four will be
+three. So let's first talk about the
+warm-up stage and how this is
+calculated. So, I haven't previously
+presented the formula for calculating
+the warm-up stage, where you're not yet
+doing the one forward, one backward run.
+So, just as a reminder here, the three
+stages are warm up, where you're just
+only doing forward passes, and then the
+steady state where it's one forward, one
+backward. That's why it's called 1 F1B.
+And then the cool down stage where
+you're only doing backward passes. So
+the warm-up stage has a formula and you
+can calculate it as the warm-up equal to
+world
+size minus rank minus one. And let's
+understand the intuition here with an
+example. So for the last GPU,
+what is the logical answer for warm-up?
+The logical answer is that there is zero
+warm-up because as you can see this last
+GPU is starting the forward backward
+forward backward right away. In fact,
+you can see that during the entire run
+it is in a steady state. So there is no
+warm-up or cool down for the last device
+because it doesn't have to wait for some
+device in front of it to do some forward
+passes and then backward. It's the last
+one. So as as soon as it does the
+forward on that last um on the as as
+soon as it does the last forward pass
+for this micro batch then it can do the
+mic then it can do the backward pass
+immediately. Whereas for example worker
+two needs to wait for its microbatch to
+get sent to worker three it does its
+backward pass and then it can do the
+backward pass on the same micro batch.
+So coming back here this means that for
+the last GPU right warm-up equals 4 - 3
+- 1 and this is zero just as we expected
+and the way you can think about this in
+an even more intuitive manner is how
+many GPUs are there in front of me this
+is what this represents right because if
+we're on the last GPU world rank sorry
+of rank three then there are zero GPUs
+in front of it. But then let's just do
+the first GPU which would be 4 -
+0 - 1 which is just three. And in this
+case if we come back to our diagram we
+know that there are three GPUs in front
+of the GPU zero. And for that reason, it
+needs to do three warm-up steps such
+that for every micro batch we send out
+afterwards as a forward, there is a
+corresponding micro batch coming into
+our inbox as a backward because we sent
+these three preemptive ones since we had
+these three GPUs. Meaning that in this
+steady state, we always have a backward
+to match with our forward. Okay, so
+we've now done these two calculations
+which gives us an intuition on why we
+need to warm up for however many GPUs
+are in front of us. Let's do one more
+example and this one will be the la the
+second to last GPU. So, it's 4 - 2 - 1 =
+1 because we're on rank two. And this
+gives us one warm-up step. And in this
+case, we only need to send one forward
+pass in advance. So that it gets
+received by the last GPU, then backward,
+and then we can backward it once again.
+So that now in this steady state, we
+send the second one and then the last
+GPU will start the background that. And
+then we just do this process over and
+over. It just repeats and it continues
+until we have the cool down stage. So
+this is the intuition on why the worker
+number two needs to send one extra
+warm-up because it needs to wait one
+step for that microbatch to become
+forwarded and backwarded by the last
+one. Okay, so there you have it. Let's
+delete this. So what we're going to do
+now is just fill in the warm-up table
+which you've already established. So the
+GPU 0 does three warm-ups, GPU 1 does
+two warm-ups, and GPU 3 does one
+warm-up. And as soon as this micro batch
+is received and we do the forward pass
+on the last GPU, then we'll do the
+backward on that same GPU. So in order
+to avoid confusion with forward and
+backward, I'm just going to make these
+cells pink, meaning that's a backward.
+And now what you'll notice is that as
+soon as this batch has been backwarded,
+this can now be done also by GPU of rank
+two. And then furthermore, we need to
+forward the first microbatch because
+it's called one forward, one backward,
+not one backward, one forward, which is
+to say that the steady state always
+begins with a forward and then the
+corresponding backward. And then now you
+can see this interle beautiful
+crosshatch which happened which means
+that this one can now be forwarded right
+this microbatch can be forwarded by the
+last GPU and then it will also be
+backwarded by that GPU and then when
+that happens we can do the same exact
+thing with GPU rank 2. So what's
+missing? There's something missing in
+this stage and that is notably
+microbatch 2 which we now must forward
+and then we'll also forward it on the
+last GPU. But there's one problem here
+and it's the fact that although
+microbatch 2 has been forwarded by the
+GPU of rank zero, it has not yet been
+forwarded by the GPU of rank one. And
+this is because we haven't started the
+steady state yet for this GPU. But if we
+come here, this is exactly where it's
+going to start. So we can say that we
+are going to now begin with the backward
+pass of microbatch zero on GPU of rank
+one. And then therefore we start the
+micro batch forward pass of microbatch 2
+so that it can be propagated forward
+across the last two devices. And then
+continuing we can now see that in this
+square we need to send microbatch three
+so that the chain can continue. And
+therefore for this microbatch to be sent
+by GPU rank one it first needs to happen
+on the forward pass of GPU rank zero.
+And now finally we can send the micro
+batch of zero all the way through the
+backward. And this means it has been
+completely cleared from our pipeline.
+And one thing that this now shows you is
+why we only have a peak activation
+memory of at most four. So if I just
+paste the following here, we'll see that
+for more up one, we sent microbatch
+zero. For two, we sent microbatch one.
+For three, we sent microbatch 2. And we
+have nothing happening in the backwards.
+And then once you reach the steady state
+in GPO rank zero then we send the micro
+batch three which means that this time
+we have the activations for three
+microbatches
+uh sorry four microbatches 0 1 2 and
+three and before we get the fifth
+activation which would be for microbatch
+five you can see that we've already
+cleared the microbatch zero through the
+entire queue meaning that the maximum
+activation size is for four microbatches
+at this point in time and then in the
+next time step when we send the
+microbatch forward pass for the number
+four microbatch then we only have 1 2 3
+and four stored in the activations. So
+once again this shows you that the peak
+activation memory is only equal to the
+number of devices in this case four and
+that is quite nice because if we were
+using microbatching with G-pipe then
+this would be eight if we had eight
+micro batches. So just continue on now.
+And one thing that you'll notice is that
+we can just put this checkered pattern
+here for the backward passes already in
+advance so that we know where the
+backward passes need to be because the
+backward passes are happening in an
+alternating fashion compared to the
+forward passes. So here we can see that
+we have to do the backward pass now for
+microbatch 2 and then the next one will
+be for microbatch three. So we're
+sending microbatch 3 here. You can see
+it's coming like this. Essentially every
+single number, right, it comes down all
+the way through the pipeline and then
+gets sent back up. So it's quite nice to
+draw out for us. And at this point,
+we've already done the first three micro
+batches completely for microbatch 0,
+one, and two. Let's continue on here. We
+can see that now we need to send the
+backward pass for microbatch three. And
+it's just going to continue on and on.
+So at this point, we've sent microbatch
+4 in the forward pass for the f the
+first GPU. Let's continue it on through
+the pipeline and then in the
+corresponding backward pass like so. But
+we should probably put the monikers
+first like this. Okay. So this is
+already progressing quite well. Let's
+look at what we're missing here. So
+what's missing at this stage? This is
+going to be the start of the forward
+pass for microbatch number five. So this
+is just going to come like this. And
+then now we're going to do the backward
+for microbatch number five. So that's
+just going to be like so. And we're
+going to go up to seven because in our
+real life implementation we're going to
+do four devices and eight microbatches.
+Okay. So where's the latest thing that
+we have yet to fill? Okay. What's going
+on here? We need to end off our backward
+pass for microbatch 3 on GPU rank one
+and GPU rank zero. And before we do
+that, I should oh call this three and
+call this three. Okay. And now the next
+thing is to start microbatch six. So
+let's start microbatch 6 all the way
+through the four GPUs. And now we need
+to stop doing the forward pass and start
+sending the backward pass for the same
+microbatch. So there you go. You can see
+in this notation microbatch 6 has been
+passed through the entire forward and
+backward. Okay. Now going on what is
+missing here? This is going to be the
+last microbatch. Microbatch 7. So this
+is the end of the batches that we're
+going to send to the pipeline. This
+means that at this stage once we send
+microbatch 7 this GPU is now done
+because it has done all of the forward
+and all of the backward passes necessary
+to complete one training step. And if we
+just compare this quickly to the diagram
+that we saw at the beginning, it's the
+same thing except the indexing here
+starts from one. But you can see it
+starts with a forward and it ends with a
+backward just as is the case here. It
+starts with the forward and then
+alternates ending with the backward. But
+let's finish it off for the rest of the
+GPUs and then we'll also be able to
+motivate why some GPUs have a cool down
+and the relationship of this cool down
+to the warm-up. So before we do that,
+let's just make sure that we finish this
+training properly. So let's see what the
+status is on all of the backward passes.
+I think at this point we're finished. So
+we've passed all of the um corresponding
+microbatches in the forward up to up to
+microbatch 7. And then we've also done
+all of the backward passes up to
+Microbat 7. But what you'll notice is
+that for GPU 0, which has three warm-up
+stages, because it's world size minus
+the rank minus 1, which is 4 - 0 - 1,
+three, it has the same number of cool
+down backward passes. And the way that
+you can think of this is the fact that
+because we sent three microbatches in
+advance, then in our steady state, we're
+only going to be able to do eight minus
+three steady state, one forward, one
+backwards because we have this debt here
+of three forward passes that we need to
+pay back in the cool down stage with the
+three backward passes of the last three
+microbatches. So we have three
+microbatches that are sent forward, the
+first three in advance and three
+microbatches that are backwarded without
+being in the steady state. So of course
+this is not ideal but because we have to
+send these first three microbatches at
+the beginning in order to ensure that
+the steady state occurs without any
+stalling then we also need to perform
+these last three backward passes outside
+of the steady state. And then
+analogously for GPU rank one we have two
+cool down periods. And then for GPU rank
+two we just have one. And this is the
+exact same number of warm-up stages that
+we have. And the last thing that I want
+to mention here is because in our
+formula for the implementation for 141b
+we're going to have three distinct
+stages. So we're going to first have one
+for loop which is only the warm-up
+phase. And then we'll have one for loop
+which is the steady state phase and one
+form up one warm-up which is the coolown
+phase. What you'll notice is that for
+the last GPU there will be no warm-up
+and cool down. So it'll just be a null
+for loop for those two and then it will
+just happen all in the steady state. But
+for the other GPUs they will have both a
+warmup and a cool down. And I want to
+also talk about quickly the relationship
+between the index of the microbatch in
+the forward pass and the index of the
+microbatch in the backward pass during
+the steady state. So here you can see
+that we're forwarding microbatch number
+three and we're backwarding microbatch
+zero. And in this case there's a
+difference of three. Here we're
+forwarding microbatch two and then we're
+backwarding microbatch zero. Here we're
+forwarding microbatch one microbatch
+zero. And here we're forwarding micro
+back zero and also backwarding micro
+back zero because once again the last
+GPU does not need to wait for any
+downstream GPUs to do their forward
+passes because it is the last GPU. So
+the pattern here is that starting at an
+index of zero. The number of the
+microbatch that you must forward pass is
+equal to the index plus the number of
+warm-up stages that that GP has to do.
+So in this case, we have index zero for
+the backward pass and that's the same
+for all four GPUs because it's doing it
+in this staircase sequential manner. But
+because we have this warm-up stage, we
+need to do the index 0 + 3 and forward
+that microbatch for the GPU zero. And
+then in this case, because we had two
+warm-up stages here, we are still doing
+the microbatch on index zero, but now
+we're doing the microbatch forward pass
+on index 0 plus two because it's number
+of warm-up stages we have here. And then
+here it's 0 + one giving us the
+microbatch one where we need to do the
+forward pass in this one forward one
+backward. And because there's no warm-up
+here, then we just also forward the same
+micro batch that we backward in the next
+stage. So if I zoom out here
+then we can see that we have essentially
+derived by ourselves the 1 F1B algorithm
+just as it's done in this case. And this
+just continues on. And one thing worth
+noting of course is that at the end of
+every single pipeline we need to do the
+optimizer step to update all of our
+model weights. So this will give you
+some good intuition to how we're going
+to implement the 1 F1B in code and let's
+get that to that right now. Okay. So
+let's jump right into the code here. 1
+F1B pipeline step. Reviewing this pseudo
+code implementation guide. We first just
+as before with Gpipe need to chunk the
+batches into micro batches and the
+targets into microtargets since we're
+still dealing with these micro batches.
+initialize the buffers for the
+activations which are the outputs of the
+forward pass and the gradients which are
+the thing which we pass along in our
+backward pass. And then we have our
+forward warm-up during which we will do
+for the number of normup steps just the
+forward pass on those specific GPUs. And
+here we use the same formula as before.
+If we are using GPU zero, then we use
+the microbatch directly. Else we receive
+the input from the previous GPU. Then we
+forward that microbatch to the model. If
+we're not the last stage, then we send
+output to the next stage. And then we
+append the input or output to the
+buffers.
+And then during the steady state, we do
+a forward pass as per above and a
+backward pass where if we are the last
+stage, we commit the loss and call
+backward to start the backward
+propagation chain. Otherwise, we receive
+the gradient from the next stage, which
+is the GPU that's upstream, and call
+backward, and then send the gradient to
+the previous stage if we're not the
+first stage. And then during the
+backward drain, we do for the number of
+drain steps, which is the same thing as
+the number of warm-up steps, the
+remaining backward passes. And finally,
+we return loss if we're the last GPU,
+else we return nothing. So I would like
+to first say instead of implementing the
+forward pass here and then here because
+as you can see we have to do the same
+forward pass here and the same forward
+pass here and then also instead of doing
+the backward pass here and here to be
+redundant we can instead make a function
+which performs the forward pass and then
+simply call it in these higher level
+functions. So that's what I'm going to
+start off with. In fact, what I'm going
+to do is establish that we first have
+the number of warm-up steps. Um, let's
+just call it warm-up to be simple. And
+this is equal to coms.orld
+size minus coms.rank
+minus one. And I apologize, I realize
+now that I've been using model.trank
+and model.orld size interchangeably.
+That's not really good code practice to
+have two different classes which have
+the same elements that we refer to. So
+for the rest of the series and for the
+rest of this implementation, I'll just
+be using communications. But if you've
+been using the attribute in the model
+class, then that's fine. It doesn't
+really make a difference to be clear.
+And then we'll do 1 f_1B
+which is the number of steady state
+passes. And this is simply the number of
+chunks which in this case will be eight
+minus the number of warm-up. And for
+example, if we are on GPU
+zero, then in this case we have three
+warm-ups at least and then we have five
+steady states because 8 minus 3 equals
+5. Okay. Now moving on, we've calculated
+these two values and now we're not going
+to use them to say for I in range
+warm-up.
+So this will be the warm-up. Then we're
+going to do forward of I and we haven't
+implemented for it yet. So it's
+technically incorrect, but we'll just
+keep on going. For I in range
+1 F1B,
+what are we going to do? We're going to
+do a forward of I and then a backward of
+I.
+And we need to capture the value for the
+backward. And I'll explain why this is
+the case once we get to that point. But
+we'll just have that for now as result.
+Okay. And just as a reminder, we have
+forward and then backward. Because in
+the steady state, we do a forward pass
+and then a backward pass. Moving on. Now
+let's tackle the last part of the one
+forward one backward pipeline
+parallelism algorithm which is simply
+the backward cool down or the drain. And
+this time we are going to be doing this
+the same amount warm-up times because we
+do the same amount of cool down as
+warm-up. We're just going to call it
+warm-up because there's no point of
+defining a second variable which is the
+same as warm-up since they have the same
+value. And then we're going to call
+backward. And we also need to store the
+result. And then this will be done not
+just on i because this would be too
+early of an index at the very end of the
+drain. We're on the later indexes. So
+it'll be I + 1 F_1B
+such that if we take again GPU0 as the
+example for the first backward that it
+has to do which in this case in its uh
+drain is the microbatch 6 but as you can
+see once again it's really misleading
+here because we should really be calling
+this microbatch 5 since we're ending
+second zero. So this is microbatch 5 and
+if we come here for the GPU zero the
+warm-up uh sorry the 1 F1B is five right
+because we established 8 - 3 is five and
+then it'll be 0 + 5 meaning that it will
+backward the correct GPU and then it
+will do another one which would be six
+and then the last one which will be
+seven and since we're just doing this
+three times we only do five six and
+seven and then this is all we do and
+let's just also add the logic here
+return loss if last stage else none So
+um if coms do rank equals coms do world
+size minus one.
+Actually I realize we haven't defined
+the loss. So let's do that right here.
+And we need to once again do gradient
+accumulation because we're doing this
+over microbatches. So we'll say total
+loss equals torch.zer zeros of one and
+device equals device in case we are
+moving this onto the GPU and I realized
+that in our G-pipe implementation. Okay,
+I've erased it since but if we come just
+back to the schedule.py I can quickly
+show you guys the G-pipe implementation
+where we instead initialize the total
+losses to that series of the output
+shape. This is slightly misleading
+because we don't know what the output
+shape is. But it's worth noting that
+since we're only calling this on the
+last GPU, the output shape of the last
+GPU is always going to be if we come to
+the model, it's always going to be the
+return value of this loss function,
+which is cross entropy loss, which is a
+scalar value. So all this is to say that
+it's slightly more readable in the code
+to just put this one here because we
+know it's a scale loss already. But if
+you do outputshape, that's also not
+incorrect because we are checking that
+this is the last GPU here. If we aren't
+checking that this is the last GPU, then
+at that point you'll have an
+output.shape of 128, sorry, of 32x 128
+um or in this case of 4x8x 128. And
+where are these numbers coming from?
+Once again, if we come into our main
+function, the batch size is 32, but we
+split up into four. So it's going to be
+4 by 8 and then by 128. Um so that would
+be incorrect. But one more time just to
+reiterate since we are so I'm switching
+in between these files way too fast.
+Since we are checking in the G-pipe
+algorithm that we are on the last GPU
+then it doesn't make a difference. And
+one last inaccuracy that I have not
+corrected since our GPU implementation,
+but I've now changed is we previously
+were not dividing the loss by the number
+of chunks or the number of microbatches
+that we were accumulating over. So that
+meant that our loss was actually scaled
+by four and all of our gradients would
+be accumulated by four since we had four
+microbatches. meaning that the effective
+learning rate of our model was four
+times that of the intended learning
+rate. So as you can see here the rate is
+0.001
+but in this case it would have been
+0.004
+and why is that? It's because instead of
+dividing by four which was the number of
+microbatches in our training loop I was
+actually just summing up the log the
+loss and I was only dividing it by four
+in the logging step. So if you guys
+remember if I just come and open up step
+five main what we were doing previously
+was loss do item divided by chunks which
+would be dividing the loss by four and
+this would correctly show what the loss
+is but this is not correctly dividing
+the loss and the corresponding gradients
+in the training step itself. So although
+we were showing the correct loss here in
+the actual back propagation mechanics we
+were effectively using a gradient that
+was four times larger than it should
+have been. So I just want to clear that
+up now. But it's not to worry because
+for this implementation and for Gpipe
+that's going to be in the course repo.
+I've added that correction. So I wanted
+to quickly comment on that and we were
+just on the total loss because we wanted
+to return it. So what we're going to do
+is just return total loss. Nothing too
+complicated. And now we have the basic
+skeleton of how the one forward one
+backward algorithm will go. And the only
+thing remaining now is to implement both
+backward and forward. And the fact is
+that we've already done these already.
+So it's going to be very simple. But
+let's first address the res. And this is
+just because in the backward pass we
+either return the loss or the gradients.
+In fact, in the backward pass, if we're
+on the lost GPU, we return the loss,
+which is the cross entry loss. If we're
+not on the last GPU, we return nothing.
+We just back propagate the gradients to
+the previous GPU. So, all we want to do
+with this re result is to say if we are
+on the last GPU, then we want to add
+this to our total loss to accumulate it.
+And then if not, the backward function
+returns none as the default value. if
+we're not on the last GPU. So in that
+case, we do nothing. So plus equals the
+result and then the same thing goes
+here. We're going to do if coms.rank
+equals equals comroll size one add to
+the loss. But this is actually a trick
+question here because in the cool down
+if we remember we never actually do
+anything on the last GPU because it's
+already done everything in the steady
+state. So for that reason, all of the
+backward passes where we do add and
+accumulate the loss over the last GPU
+only happen in the steady state. Once
+again, there's no cool down for the last
+GPU. So there's no point of checking it
+in the cool down phase. So we only want
+to check it here. And in fact, for that
+reason, we can remove this. Okay. So
+let's now define forward and backward.
+And it it it uh receives a index I as
+its input. And we'll just call this
+microcorebatch_index
+so we don't have it the same name as in
+this loop where it's called I just to
+avoid any confusion. And then we are
+also correspondingly going to call
+backward this which also receives the
+microbatch index. So we'll just refer to
+our G-pipe code here since we've already
+written it and this way I'll have less
+chance of writing any bugs mistakenly.
+So just as a reminder during the forward
+pass we first set up the input and this
+is to say if we are on GPU0 then we will
+get the micro batch from our micro
+batches list and then since this list
+only exists for GPU0 otherwise we're
+just going to receive from the previous
+GPU. So coming here we're just going to
+do if coms.rank rank equals zero.
+Then we will say input data
+equals micro batches. Did we not define
+the list? Okay, that's a good start. I
+realized that we haven't defined the
+chunk.
+We haven't actually chunked the batches
+into microbatch and targets and we also
+have not initialized the buffer for
+activations and gradients. So we'll
+remove the pass here and do that
+quickly. If coms.rank rank equals equals
+zero. Then let's define the microbatches
+for the last GPU and we will call
+torch.chunk for this purpose over the
+batches and we'll chunk them into in
+this case a chunks for 1 F1B and then if
+coms.rank rank equals coms.orld
+size minus one. We will add our micro or
+we'll instantiate our micro targets list
+over the targets which are once again
+randomly initialized. So I realize now
+that this is kind of strange because in
+one case we're using the torch.chunk
+method. Another case we're using the
+other uh notation where you can replace
+torch with just the first argument of
+the function. So let's not do that here
+just to be consistent. Torch.chunk
+over targets into chunks.
+Okay. And then we also want to define
+our input buffers
+and our output buffers. Oh, sorry about
+that. One thing that I will mention is
+that instead of defining this as a empty
+list, I'm going to define it as a list
+of none by chunks. And why am I doing
+this? It's because
+just out of my own uh practice of
+implementing this before recording this
+course, since we do have interled
+forward backward passes in 1 F1B versus
+the G-pipe algorithm where everything is
+consecutive and there's no interle of
+forward and backward. This results in
+list accesses which are out of index. if
+you simply append like we're doing here
+and just call the index consecutively.
+But since we're doing it kind of out of
+order in F1B, just out of my own
+experience, doing a list that's
+initialized as zero leads to a index
+error. So for that reason, if we come
+back here, we're just going to start our
+index, sorry, our input and our output
+buffers both as a list of non-chunks. So
+in this case, chunks being eight. Okay,
+so let's just change this to output. And
+then coming back here, we can finally
+recont continue our micro batches
+implementation by just grabbing the
+microbatch index for our forward pass.
+So that's all we have to do in this case
+and then otherwise we are on a nonGPU
+zero GPU and the shape of the tensor
+since we are doing gradientation across
+these microbatches is batch divided by
+chunks and the hidden dimension remains
+the same. Then we will grab the
+activations from the GPU that is in
+front of us through the coms. Forward
+method and that takes the following
+shape and device parameters. And then we
+also need to set the input data uh
+requires gradient to true. So so we
+properly save the gradients. And then
+the last step of course is to do the
+forward pass itself since at this point
+we've just got the data the activations
+whatever they may be to perform that
+forward pass. So let's just first check
+if the GPU is the last one in which case
+we will compute with our targets. So
+world size oops minus one. Then in this
+case the output is the model
+with both the input data and the micro
+targets
+but we take the specific micro batch
+index in this case and then otherwise
+we will say the output is the
+model on the input
+and then we'll pass it forward. So we'll
+say coms send_forward
+of the detached output since we don't
+want to pass the pietorch graph to
+another device as that will lead to
+memory leakage as we as we established
+and here we will set our input buffers
+of the specific micro batch so we save
+it and don't lose this to the input data
+and then likewise is for the output. So
+if I come here and do this, this should
+work except this is called output. All
+right. So that's the forward pass. And
+now for the backward pass, it's the same
+procedure as the forward except in the
+opposite direction. So first we need to
+grab our input data from the input
+buffers using our index.
+And let's also grab the output from the
+output buffers list.
+All right. And then the next step is to
+see what GPU we're on. So if we're on
+GPU, the last one, then we need to
+calculate the loss and
+add it to our running sum. But since
+it's a function here, this is actually
+not going to be the case. We're instead
+going to return the loss because if you
+remember here, we add the total the
+result of the function to the total
+loss. So let's first put this check
+here. If we're on the last device,
+then the loss is equal to the output
+divided by the chunks. Then we will call
+backward on the loss to begin the
+backward propagation pass. And then
+nothing will happen here because we're
+just going to return the loss. And now
+let's move on to the case we're not the
+last GPU. So let's just call this
+gradient equals coms.receive backward
+from the GPU that is upstream and this
+takes the parameter output shape since
+we need to know what size that we're
+receiving and it's the same size as the
+output activation since the gradients
+output activations have the same
+dimensionality the same device too and
+then in this case we will call output
+backward. So it's applying the first
+argument as the activations and the
+second argument as the gradients or we
+can equivalently do just torch.backward
+backward of outputs and
+grads and this is called output if I'm
+not mistaken. So torch.backward and
+output.backward of the gradients is the
+same exact syntax. And now if we come
+into our penultimate check which is to
+say are we on the non first GPU because
+in that case we'll need to continue the
+back pass or else the gradient signal
+will die. And in this case, we want to
+send the gradients of the inputs to that
+layer to the previous layer so that it
+can compute its own gradients with
+respect to the input. And as I mentioned
+here, we want to check if we're the last
+GPU, then we want to return loss so that
+we can continue
+the gradient accumulation or rather the
+accumulation of the loss so that we can
+just present that as a statistic.
+Okay, so it looks like our entire setup
+is good and let's just run it and see
+what happens. So, we're going to come
+into our terminal UV torch run. And in
+this case, we still want to say that we
+have four nodes. The one thing is I
+don't think we've changed our chunk to
+eight. So, let's Oh, no. We have it as
+eight. So, there you go. And that number
+of process per node here is four. We're
+going to come into the my work directory
+and we're going to do step six, not step
+six, sorry, step five because we're
+running the main function. and let's see
+what happens.
+Okay, so it looks like we have a bug
+here. And what is that exactly? Ah, so
+somewhere I said ranks by accident. So
+there you go. Let's change that and
+let's see now what happens what we get.
+Okay, one more bug. Hopefully we can fix
+this really fast. There is no input.
+Method. Ah, input. Why am I calling
+input? It's input data.
+Oh yeah, that's a built-in method. Oops.
+That's the Python built-in input method,
+not the input data that is representing
+the input to a specific forward layer.
+Okay. And now we got the error that I
+was wishing we h we would get. And
+what's happening? We're getting a
+deadlock error. So deadlock means
+there's two processes that are expecting
+to receive data from each other and
+they're both sending. But since they're
+both sending and they're both expecting
+to receive, it's essentially that
+they're like walking through the same
+hallway and there's only space for one
+person in that hallway and they're
+trying to get past each other, but there
+is not enough space to get past each
+other. So, it's as if they're trying to
+send each other two things. And for this
+reason, it's getting stuck. And I have
+an explanation for why it's happening.
+But once again, this is mainly due to
+this interleing 1 F1B structure, which
+is not really sequential. And let's go
+and see what's happening. So this is the
+explanation why 1F1B needs an async
+forward and request tracking. So we're
+first going to talk about this
+asynchronous forward which will use the
+I send forward instead of just the send
+forward method. And this just means it's
+an asynchronous method such that it
+doesn't wait until it actually is
+received to move to the next part of the
+function. Instead, when you have an
+asynchronous forward, it will call that
+forward and then move on to the next
+piece of code and just add that to the
+asynchronous queue. So, what's actually
+happening here is that so rank two is
+trying to forward microbatch one to rank
+three and rank three is trying to
+forward micro or rather backward
+microbatch zero to rank two. So, where
+does this happen in the code? It happens
+right here. So, this is the GP of rank
+two and it is trying to forward the
+microbatch one. So once again, we're
+doing zero indexing here, but it's kind
+of misleading. It's trying to forward
+microbatch 1 to GPU 3, and GPU 3 is
+trying to send microbatch zero in the
+backward pass to microbatch to GPU 2.
+And because they're both trying to send
+and receive, you can see actually we
+have this like cross-hatch diagonal
+thing going on here. Because of this,
+none of them can receive since they're
+both sending and they're both waiting
+for the other to receive before they
+move on to the next part of their code.
+And for this reason, we need to do an
+asynchronous send. And this is going to
+be pretty simple to add to our code. So,
+what we're going to do is first come
+here and we only need to modify our send
+forward method. So, that is right here.
+We're just going to call this I send
+forward. And then if we come into our
+coms, I think I've already added it,
+right? So it's identical almost to send
+forward except instead of doing dist
+send, it's just called distend. And just
+as it says here, it sends a tensor
+asynchronously as opposed to sending a
+tensor in the above case synchronously.
+So we're really just changing one
+letter. But if you guys come back into
+our code and if we terminate this and
+try it again, we'll see that it actually
+gets a different error now. Hopefully.
+There you go. So, what's the new error?
+Let's read this together.
+It's pretty important. Yes. Cannot lock
+pointer to unbound buffer. Okay. So,
+what does that mean? It essentially
+means that there's a pointer that's
+pointing to some memory, but it's
+unbound. meaning this memory is not
+saved. So the pointer will not be able
+to with certainty maintain this part of
+memory and what's happening here. So
+this is the second error that I have in
+our little explanation if we come down.
+So the first one was once again the send
+forward deadlock and the second one is
+we need to save these request handles to
+prevent buffer deallocation. So what's
+happening in I send forward without
+request saving when we do our forward
+pass it starts the async send but the
+request is not saved anywhere and this
+means that the function returns but the
+request goes out of scope so it's just
+kind of discarded as a local variable
+and then the Python garbage collector
+will potentially and this is what
+happens because we got this sig term
+error if you
+So because of this error, this means
+that the Python garbage collector freed
+that memory and then now the pointer was
+pointing to an unbound buffer and that's
+what gave us the error. So what's
+happening in the communication back end
+when we get this error is that the
+asynchronous send creates an internal
+buffer that references this output and
+then it does the send in the background
+because it's asynchronous and this
+request object is garbage collected. So
+glue loses the reference to the
+output.attach attach object and then it
+tries to access the buffer again but it
+cannot lock the pointer to an unbound
+buffer and then it crashes. So because
+of this what we're going to instead do
+is create a list called async requests
+which will just save the buffers as a
+persistent state. And because this list
+that we will define called async
+requests will be defined outside of the
+helper function, it will persist in
+scope until the 1F1B function returns.
+And this is good because by that point
+all of the sends will have been
+completed. So let me now show you what
+this whole explanation looks like in
+practice. So because we return the
+asynchronous send object in this
+function which is a distributed request
+object then we can save it as just req
+as we had in that diagram there like
+this
+and then we will do the following first
+we'll say async
+request and once again this list is
+simply to save that memory so that it's
+not save that buffer so that it's not
+deallocated by the garbage collector. So
+it's just empty list at the start
+and then we will add to that empty list
+once again right after the asynchronous
+send. So we'll append the request
+and yeah that's pretty much it at this
+point. Now these requests will be saved
+and they will not be garbage collected
+and it should work. So let's try this
+one final time and see what happens.
+Okay, never mind. Torch has no object.
+Ah, okay. So, I think we need to do
+torch.autograd here. I forgot that it is
+not just torch. But rather
+torch.autograd.backward.
+If you want to use this type of
+notation. So, coming into our backward.
+Where are we doing this? Right. It's
+right here. So, autograd. Boom. There
+you go. Now, it's filling up.
+All right. Boom. So, we got our result.
+This is really awesome. So now let's see
+what we get with G-pipe just as a
+comparison since I forget. And let's
+check it out. Boom. So we do get the
+same loss both with Gpipe and 1 F1B,
+which is what we should get in
+expectation since they're both doing the
+exact same work. The only difference
+being that the 1 F1B is interle forward
+and backward passes in a smart way to
+reduce the P peak activation memory. So
+yeah, this is awesome. Our 1F1B is
+finally working and running really
+smoothly. So there you go. You can see
+that when we define these forward and
+backward passes as helper functions, we
+can show our training loop in these
+three distinct phases in a really clean
+and concise way. And in my opinion, it
+makes it really nice to understand. So
+since we've now done all of our
+implementations of the three algorithms
+of the course, the only step that I
+mentioned we would still do is to
+profile these and see how they perform
+in terms of GPU and device utilization.
+So I should have this command saved. All
+right. So I'm going to run profile main
+right now. And if we just come to
+profiled main, we'll see that it's
+currently set up to run 1 F1B in the
+profile schedule. So it's the exact same
+1F1B as we implemented except it has
+once again all of these context managers
+to record the backward compute and the
+different operations that occurred
+during the pipeline process. So running
+this now let's see what we get. It
+should be better than the GPU
+utilization that we got with our naive
+pipeline. And in this case we can see it
+is. So as we can see the compute share
+of the time spent has increased and as
+it was the same before since the last
+GPU needs to do the model head in terms
+of doing that classification binary
+classification it has larger compute
+compared to other GPUs and just out of
+curiosity we can also run this sameuler
+with Gpipe because we didn't do that
+once we finished our implementation of
+that. So let's just do this now for our
+own curiosity and see what we get. It
+should be slightly worse than our 1F1B
+algorithm. And you can see that that's
+the case. So 24.9 27 24.5 and 36 whereas
+before we're getting 29 27 28 and 41. So
+1 F1B as expected does perform better.
+The one thing I will notice that I will
+mention rather is that because we did
+use synchronous operations for
+everything except the forward send. So
+you can see here that everything else
+receive is synchronous. Um yeah, this is
+the only asynchronous operation that's
+in our entire codebase. Because of this,
+we're still going to be pretty slow and
+have to wait because these are blocking
+communications. The asynchronous
+functions once again wait until the send
+or receive occurs before they move on.
+If we did asynchronous interle then the
+amount of time spent waiting would be
+even less. But once again we're here to
+learn the principles of pipeline payism
+and not how to optimize it. So if we
+come to the outline of the course we've
+now done up to 1 F1B which is the last
+part of our syllabus. Once again we have
+this dualpipe slide which is just left
+an exercise to the user. If you'd like,
+you should now be able to go look up the
+dualpipe method, see how it works, and
+find a way to implement this using the
+basic printers that we defined in this
+course. And there you go. So, if you'd
+like a future course where we design and
+implement dual pipe from scratch, then
+definitely let me know. Otherwise, I
+hope you enjoyed this course and I hope
+that now you have a greater intuition as
+to the inner workings of pipeline
+parallelism through this from scratch
+implementation. So, thanks for watching
+and have a nice day.
