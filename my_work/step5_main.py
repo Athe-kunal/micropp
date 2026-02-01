@@ -5,6 +5,8 @@ import torch.optim as optim
 
 # Import our modules
 from step6_schedule import naive_pipeline_step
+from step4_model import ShardedMLP
+from step2_comms import init_distributed, PipelineComms
 
 # Hyperparameters
 BATCH_SIZE = 32
@@ -13,8 +15,8 @@ TOTAL_LAYERS = 16
 STEPS = 50
 
 # 1. Setup Distributed Environment TODO
-rank, world_size, device = None
-comms = None
+rank, world_size, device = init_distributed()
+comms = PipelineComms()
 
 torch.manual_seed(42)
 # Each rank needs to "skip" the random numbers used by previous ranks
@@ -28,19 +30,19 @@ if rank == 0:
     print(f"--- Starting Micro PP on {world_size} Processes (Mac/CPU) ---")
 
 # 2. Initialize the Sharded Model TODO
-model = None
+model = ShardedMLP(HIDDEN_DIM, TOTAL_LAYERS, rank, world_size).to(device)
 
 # 3. Setup Optimizer
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 # 4. Only Rank 0 loads the data. TODO
 if rank == 0:
-    fixed_input = None
+    fixed_input = torch.randn((BATCH_SIZE, HIDDEN_DIM), device=device)
 else:
-    pass
+    fixed_input = BATCH_SIZE
 # 5. Only the Last Rank needs the targets to calc loss. TODO
 if rank == world_size - 1:
     # We want the model to learn to classify these random vectors into class '0' or '1'
-    fixed_target = None
+    fixed_target = torch.randint((0, 2), BATCH_SIZE, device=device)
 else:
     pass
 
