@@ -1,5 +1,8 @@
+import torch
 from step2_comms import PipelineComms
 from step4_model import ShardedMLP
+
+CHUNKS = 4
 
 
 def naive_pipeline_step(
@@ -19,12 +22,31 @@ def naive_pipeline_step(
     - Return loss if last stage, else None
     """
     # TODO: If comms.rank == 0, use 'batch' directly; else, receive input
+    if comms.rank == 0:
+        input_data = batch
+    else:
+        shape = (batch, hidden_dim)
+        comms.recv_forward(shape, device)
     # TODO: Forward pass through model
+    output = model(input_data, targets)
+    if model.rank != model.world_size - 1:
+        comms.send_forward(output.detach())
     # TODO: If not last stage, send output to next stage
+    if model.rank == model.world_size - 1:
+        loss = output
+        loss.backward()
     # TODO: Backward pass (different for last and non-last stage)
+    else:
+        gradients = comms.recv_backward(output.shape, device)
+        output.backward(gradients)
+
+    if model.rank != 0:
+        comms.send_backward(input_data.grad)
     # TODO: Send grad to previous stage if not first
     # TODO: Return loss if last stage, else None
-    pass
+    if model.rank == model.world_size - 1:
+        return loss
+    # pass
 
 
 def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device):
@@ -44,6 +66,48 @@ def gpipe_pipeline_step(model, comms, batch, targets, hidden_dim, chunks, device
     #     - Else, receive grad from next stage and call backward
     #     - Send grad to previous stage if not first
     # TODO: Return loss if last stage, else None
+    if model.rank == 0:
+        micro_batches = torch.chunk(batch / chunks, chunks)
+    if model.rank == model.world_size - 1:
+        micro_targets = torch.chunk(targets, chunks)
+
+    # manual activations are stored here
+    # backwards will be done here
+    input_buffer = []
+    output_buffer = []
+
+    for i in range(chunks):
+        if comms.rank == 0:
+            input_data = micro_batches[i]
+        else:
+            shape = (micro_batches[i], hidden_dim)
+            input_data = comms.recv_forward(shape, device)
+            input_data.requires_grad = True
+        if model.rank == model.world_size - 1:
+            output = model(input_data, micro_targets[i])
+        else:
+            output = model(input_data)
+        if model.rank != model.world_size - 1:
+            comms.send_forward(output.detach())
+        input_buffer.append(input_data)
+        output_buffer.append(output)
+    total_loss = torch.zeros(output.shape)
+    for i in range(chunks):
+        input_data = input_buffer[i]
+        output = output_buffer[i]
+
+        if model.rank == model.world_size - 1:
+            loss = output
+            loss.backward()
+            total_loss += loss
+        else:
+            gradients = comms.recv_backward(output.shape, device)
+            output.backward(gradients)
+        if model.rank != 0:
+            comms.send_backward(input_data.grad)
+    if model.rank == model.world_size - 1:
+        return loss
+
     pass
 
 

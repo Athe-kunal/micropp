@@ -4,7 +4,7 @@ import torch
 import torch.optim as optim
 
 # Import our modules
-from step6_schedule import naive_pipeline_step
+from step6_schedule import naive_pipeline_step, gpipe_pipeline_step
 from step4_model import ShardedMLP
 from step2_comms import init_distributed, PipelineComms
 
@@ -13,6 +13,7 @@ BATCH_SIZE = 32
 HIDDEN_DIM = 128
 TOTAL_LAYERS = 16
 STEPS = 50
+CHUNKS = 4
 
 # 1. Setup Distributed Environment TODO
 rank, world_size, device = init_distributed()
@@ -42,7 +43,7 @@ else:
 # 5. Only the Last Rank needs the targets to calc loss. TODO
 if rank == world_size - 1:
     # We want the model to learn to classify these random vectors into class '0' or '1'
-    fixed_target = torch.randint((0, 2), BATCH_SIZE, device=device)
+    fixed_target = torch.randint((0, 2), (BATCH_SIZE,), device=device)
 else:
     pass
 
@@ -50,15 +51,24 @@ model.train()
 for step in range(STEPS):
     optimizer.zero_grad()
     start_time = time.time()
-    loss = naive_pipeline_step(
-        model, comms, fixed_input, fixed_target, HIDDEN_DIM, device
-    )
+    if rank == world_size - 1:
+        loss = gpipe_pipeline_step(
+            model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS, device
+        )
+        # loss = naive_pipeline_step(
+        #     model, comms, fixed_input, fixed_target, HIDDEN_DIM, device
+        # )
+    else:
+        # naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, device)
+        naive_pipeline_step(model, comms, fixed_input, fixed_target, HIDDEN_DIM, CHUNKS device)
     optimizer.step()
     if rank == world_size - 1 and step % 5 == 0:
         print(f"Step {step:02d} | Loss: {loss.item():.6f}")
+        # If gpipe then divide loss by num_chunks
+        # print(f"Step {step:02d} | Loss: {loss.item() / NUM_CHUNKS:.6f}")
 
 # Clean up
-if rank == 0:
+if rank == world_size - 1:
     print("--- Training Complete ---")
     duration = time.time() - start_time
     print(f"Final Loss: {loss.item():.6f} | Time: {duration:.3f}s")
